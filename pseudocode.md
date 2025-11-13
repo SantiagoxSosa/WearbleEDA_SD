@@ -292,5 +292,3 @@ on_push_or_pr:
 6. PySide6 GUI displays plots and live metrics using PyQtGraph.
 
 ---
-
-End of document.
