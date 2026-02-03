@@ -83,8 +83,8 @@ class ResearchStyleSheet:
 
         /* Accent Button (Insert Event) */
         QPushButton#accent {{ 
-            background-color: {COLOR_ACCENT}; 
-            color: {COLOR_TEXT}; 
+            background-color: {COLOR_PRIMARY}; 
+            color: {COLOR_ACCENT}; 
             border: 1px solid #E5B000;
         }}
         QPushButton#accent:hover {{ background-color: #FFD700; }}
@@ -129,6 +129,12 @@ class ResearchStyleSheet:
         /* MODALS (Strict Light Mode) */
         QDialog {{ background-color: {COLOR_BG_WHITE}; }}
         QLabel#h1 {{ color: {COLOR_PRIMARY}; font-size: 14pt; font-weight: bold; }}
+        
+        QFrame#event_bar {{
+            background: {COLOR_BG_LIGHT};
+            border: 1px solid #CCC;
+            border-radius: 8px;
+        }}
         """
 
 # --- CUSTOM MODAL DIALOGS ---
@@ -599,16 +605,16 @@ class MainWindow(QMainWindow):
         l_live = QVBoxLayout(p_live)
         
         # Top Graph: Dual Axis (EDA + HR)
-        self.graph_main = BioSignalPlot("Raw Signals", "EDA", "µS", "Heart Rate", "BPM")
+        self.graph_main = BioSignalPlot("Live Physiological Signals (EDA | HR)", "EDA", "µS", "Heart Rate", "BPM")
         l_live.addWidget(self.graph_main, 5)
         
         # Bottom Graph: Decomposition
-        self.graph_sub = BioSignalPlot("EDA Decomposition", "Phasic Driver", "µS")
+        self.graph_sub = BioSignalPlot("Signal Decomposition (Phasic | Tonic)", "Phasic Driver", "µS")
         l_live.addWidget(self.graph_sub, 3)
         
         # Event Insertion Bar
         f_evt = QFrame()
-        f_evt.setStyleSheet(f"background: {COLOR_BG_LIGHT}; border: 1px solid #CCC; border-radius: 8px;")
+        f_evt.setObjectName("event_bar")
         hl = QHBoxLayout(f_evt)
         
         hl.addWidget(QLabel("Event Label:"))
@@ -617,10 +623,16 @@ class MainWindow(QMainWindow):
         hl.addWidget(self.txt_event)
         
         btn_insert = QPushButton("Insert Event")
-        btn_insert.setObjectName("accent") # Yellow
-        btn_insert.setIcon(self.style().standardIcon(pg.QtWidgets.QStyle.SP_DialogYesButton))
-        btn_insert.clicked.connect(self.on_insert_event)
+        btn_insert.setObjectName("secondary") # Gray
+      
+        btn_insert.clicked.connect(lambda: self.on_insert_event())
         hl.addWidget(btn_insert)
+
+        for key, label in [("F1", "Task Start"), ("F2", "Event"), ("F3", "Recovery")]:
+            btn = QPushButton(f"{key}: {label}")
+            btn.setObjectName("secondary")
+            btn.clicked.connect(lambda checked=False, l=label: self.on_insert_event(l))
+            hl.addWidget(btn)
         
         l_live.addWidget(f_evt)
         self.center_stack.addWidget(p_live)
@@ -723,10 +735,10 @@ class MainWindow(QMainWindow):
             self.lbl_rec_hint.setStyleSheet("color: black;")
             self.statusBar().showMessage("Acquisition Paused.")
 
-    def on_insert_event(self):
-
-
-        label = self.txt_event.text() or "Event"
+    def on_insert_event(self, label=None):
+        if label is None:
+            label = self.txt_event.text() or "Event"
+            self.txt_event.clear()
         
         # Random Color
         color = "#" + ''.join([random.choice('0123456789ABCDEF') for _ in range(6)])
@@ -749,8 +761,42 @@ class MainWindow(QMainWindow):
             'line_sub': l2,
             'item': item
         })
+
+    def create_status_bar(self):
+
+        status = QStatusBar()
+
+        self.setStatusBar(status)
+
         
-        self.txt_event.clear()
+
+        # Permanent widgets
+
+        self.lbl_disk = QLabel("Disk: 45GB Free")
+
+        self.lbl_ram = QLabel("RAM: 12% Used")
+
+        self.lbl_time = QLabel()
+
+        
+
+        status.addPermanentWidget(self.lbl_disk)
+
+        status.addPermanentWidget(self.lbl_ram)
+
+        status.addPermanentWidget(self.lbl_time)
+
+        
+
+        # Update time
+
+        timer = QTimer(self)
+
+        timer.timeout.connect(lambda: self.lbl_time.setText(f"System Time: {datetime.datetime.now().strftime('%H:%M:%S')}"))
+
+        timer.start(1000)
+
+
 
     def on_delete_flag(self):
         row = self.list_flags.currentRow()
