@@ -243,8 +243,8 @@ class RibbonButton(QToolButton):
 class BioSignalPlot(QWidget):
     def __init__(self, title, left_label, left_unit, right_label=None, right_unit=None):
         super().__init__()
-        self.layout = QVBoxLayout(self)
-        self.layout.setContentsMargins(0, 0, 0, 0)
+        self.layout = QVBoxLayout(self) # type: ignore
+        self.layout.setContentsMargins(0, 0, 0, 0) # type: ignore
         
         # Configuration
         pg.setConfigOption('background', 'w')
