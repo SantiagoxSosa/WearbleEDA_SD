@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                                QHBoxLayout, QLabel, QPushButton, QLineEdit, 
                                QGroupBox, QFrame, QStatusBar, QMenuBar, QMenu, 
                                QDialog, QListWidget, QStackedWidget, QMessageBox,
-                               QGridLayout, QTabWidget, QToolButton, QFileDialog,
+                               QGridLayout, QTabWidget, QToolButton, QFileDialog, QTextEdit,
                                QSizePolicy, QSplitter, QAbstractItemView)
 from PySide6.QtCore import Qt, QTimer, QSize, QTime
 from PySide6.QtGui import QAction, QFont, QIcon, QColor, QPalette
@@ -532,11 +532,37 @@ class MainWindow(QMainWindow):
         # Session Info
         grp_sub = QGroupBox("Subject Data")
         gl = QGridLayout()
-        gl.addWidget(QLabel("Subject ID:"), 0,0)
-        self.txt_subject_id = QLineEdit("SUB-042")
-        gl.addWidget(self.txt_subject_id, 0,1)
-        gl.addWidget(QLabel("Session:"), 1,0)
-        gl.addWidget(QLineEdit("001"), 1,1)
+        
+        gl.addWidget(QLabel("Name:"), 0, 0)
+        self.txt_sub_name = QLineEdit()
+        self.txt_sub_name.setReadOnly(True)
+        gl.addWidget(self.txt_sub_name, 0, 1)
+
+        gl.addWidget(QLabel("ID:"), 1, 0)
+        self.txt_sub_id = QLineEdit()
+        self.txt_sub_id.setReadOnly(True)
+        gl.addWidget(self.txt_sub_id, 1, 1)
+        
+        gl.addWidget(QLabel("Sex:"), 2, 0)
+        self.txt_sub_sex = QLineEdit()
+        self.txt_sub_sex.setReadOnly(True)
+        gl.addWidget(self.txt_sub_sex, 2, 1)
+
+        gl.addWidget(QLabel("Height: "), 3, 0)
+        self.txt_sub_height = QLineEdit()
+        self.txt_sub_height.setReadOnly(True)
+        gl.addWidget(self.txt_sub_height, 3, 1)
+
+        gl.addWidget(QLabel("Notes:"), 4, 0)
+        self.txt_sub_notes = QTextEdit()
+        self.txt_sub_notes.setReadOnly(True)
+        self.txt_sub_notes.setMaximumHeight(50)
+        gl.addWidget(self.txt_sub_notes, 4, 1)
+
+        gl.addWidget(QLabel("Session:"), 5, 0)
+        self.txt_session = QLineEdit("001")
+        gl.addWidget(self.txt_session, 5, 1)
+        
         grp_sub.setLayout(gl)
         layout.addWidget(grp_sub)
         
@@ -866,6 +892,19 @@ class MainWindow(QMainWindow):
     def open_subject_data_dialog(self):
         dialog = SubjectDataDialog(self)
         if dialog.exec():
+            # If data was saved, populate the left panel
+            if dialog.saved_data:
+                if len(dialog.saved_data) == 5:
+                    sid, name, sex, height, notes = dialog.saved_data
+                    self.txt_sub_id.setText(str(sid))
+                else:
+                    name, sex, height, notes = dialog.saved_data
+                    self.txt_sub_id.setText("New")
+
+                self.txt_sub_name.setText(name)
+                self.txt_sub_sex.setText(sex)
+                self.txt_sub_height.setText(str(height))
+                self.txt_sub_notes.setText(notes)
             self.statusBar().showMessage("Subject metadata updated successfully.", 5000)
 
     def on_import_subject(self):
@@ -873,7 +912,12 @@ class MainWindow(QMainWindow):
         if dlg.exec():
             sub = dlg.selected_subject
             if sub:
-                self.txt_subject_id.setText(sub[1]) # Use Name
+                # sub is tuple: (id, name, sex, height, notes)
+                self.txt_sub_id.setText(str(sub[0]))
+                self.txt_sub_name.setText(sub[1])
+                self.txt_sub_sex.setText(sub[2])
+                self.txt_sub_height.setText(str(sub[3]))
+                self.txt_sub_notes.setText(sub[4])
                 self.statusBar().showMessage(f"Imported subject: {sub[1]}")
 
 if __name__ == "__main__":

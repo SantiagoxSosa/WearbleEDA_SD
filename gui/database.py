@@ -40,8 +40,15 @@ class DatabaseManager:
         """Retrieves all subjects from the database."""
         with sqlite3.connect(self.db_name) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM subjects")
+            cursor.execute("SELECT id, name, sex, height, notes FROM subjects")
             return cursor.fetchall()
+
+    def delete_subject(self, subject_id):
+        """Deletes a subject from the database."""
+        with sqlite3.connect(self.db_name) as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM subjects WHERE id=?", (subject_id,))
+            conn.commit()
 
 # --- UI DIALOG ---
 class SubjectDataDialog(QDialog):
@@ -51,6 +58,7 @@ class SubjectDataDialog(QDialog):
         self.setFixedSize(400, 450)
         self.db_manager = DatabaseManager()
         
+        self.saved_data = None
         self.setup_ui()
 
     def setup_ui(self):
@@ -72,11 +80,8 @@ class SubjectDataDialog(QDialog):
         self.input_sex.addItems(["Select...", "Male", "Female", "Other"])
 
         # Height input configured for Inches
-        self.input_height = QDoubleSpinBox()
-        self.input_height.setRange(0.0, 1000.0)
-        self.input_height.setSuffix(" cm")
-        self.input_height.setDecimals(1)
-        self.input_height.setValue(0.0)
+        self.input_height = QLineEdit()
+        self.input_height.setPlaceholderText("e.g. 180.5")
 
         self.input_notes = QTextEdit()
         self.input_notes.setPlaceholderText("Pre-existing conditions, resting heart rate baseline, etc.")
@@ -84,7 +89,7 @@ class SubjectDataDialog(QDialog):
 
         form_layout.addRow("Name:", self.input_name)
         form_layout.addRow("Sex:", self.input_sex)
-        form_layout.addRow("Height (in):", self.input_height)
+        form_layout.addRow("Height (cm):", self.input_height)
         form_layout.addRow("Notes:", self.input_notes)
 
         main_layout.addLayout(form_layout)
@@ -113,7 +118,7 @@ class SubjectDataDialog(QDialog):
     def validate_and_save(self):
         name = self.input_name.text().strip()
         sex = self.input_sex.currentText()
-        height_in = self.input_height.value()
+        height_str = self.input_height.text().strip()
         notes = self.input_notes.toPlainText().strip()
 
         # Strict Validation
@@ -123,8 +128,13 @@ class SubjectDataDialog(QDialog):
         if sex == "Select...":
             QMessageBox.warning(self, "Validation Error", "Please select a valid Sex.")
             return
-        if height_in <= 0:
-            QMessageBox.warning(self, "Validation Error", "Height must be greater than 0.")
+        
+        try:
+            height_in = float(height_str)
+            if height_in <= 0:
+                raise ValueError
+        except ValueError:
+            QMessageBox.warning(self, "Validation Error", "Height must be a valid number greater than 0.")
             return
         if not notes:
             QMessageBox.warning(self, "Validation Error", "Notes cannot be empty.")
@@ -137,6 +147,7 @@ class SubjectDataDialog(QDialog):
         # Database Insertion
         try:
             self.db_manager.insert_subject(name, sex, height_cm, notes)
+            self.saved_data = (name, sex, height_cm, notes)
             print("Subject saved to database.")
             self.accept() # Closes dialog successfully
         except Exception as e:
@@ -149,8 +160,11 @@ class SubjectDataDialog(QDialog):
             if sub:
                 self.input_name.setText(sub[1])
                 self.input_sex.setCurrentText(sub[2])
-                self.input_height.setValue(sub[3])
+                self.input_height.setText(str(sub[3]))
                 self.input_notes.setText(sub[4])
+                
+                self.saved_data = sub
+                self.accept()
 
 class SubjectSelectionDialog(QDialog):
     def __init__(self, parent=None):
@@ -169,6 +183,7 @@ class SubjectSelectionDialog(QDialog):
         layout.addWidget(header)
 
         self.list_widget = QListWidget()
+        self.list_widget.itemDoubleClicked.connect(self.validate_and_select)
         self.populate_list()
         layout.addWidget(self.list_widget)
 
@@ -177,15 +192,22 @@ class SubjectSelectionDialog(QDialog):
         btn_cancel.setObjectName("secondary")
         btn_cancel.clicked.connect(self.reject)
         
+        btn_delete = QPushButton("Delete")
+        btn_delete.setObjectName("secondary")
+        btn_delete.clicked.connect(self.delete_selection)
+
         btn_select = QPushButton("Import")
+        btn_select.setDefault(True)
         btn_select.clicked.connect(self.validate_and_select)
         
         btn_box.addStretch()
         btn_box.addWidget(btn_cancel)
+        btn_box.addWidget(btn_delete)
         btn_box.addWidget(btn_select)
         layout.addLayout(btn_box)
 
     def populate_list(self):
+        self.list_widget.clear()
         subjects = self.db_manager.get_all_subjects()
         for sub in subjects:
             # sub is tuple: (id, name, sex, height, notes)
@@ -200,3 +222,14 @@ class SubjectSelectionDialog(QDialog):
             self.accept()
         else:
             QMessageBox.warning(self, "No Selection", "Please select a subject to import.")
+
+    def delete_selection(self):
+        current = self.list_widget.currentItem()
+        if current:
+            sub = current.data(Qt.UserRole)
+            reply = QMessageBox.question(self, "Confirm Delete", 
+                                         f"Are you sure you want to delete {sub[1]}?",
+                                         QMessageBox.Yes | QMessageBox.No)
+            if reply == QMessageBox.Yes:
+                self.db_manager.delete_subject(sub[0])
+                self.populate_list()
