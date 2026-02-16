@@ -1,3 +1,5 @@
+from database import SubjectDataDialog, SubjectSelectionDialog
+
 import sys
 import datetime
 import random
@@ -42,6 +44,19 @@ class ResearchStyleSheet:
         }}
         QMenuBar::item {{ background: transparent; color: white; padding: 8px 15px; }}
         QMenuBar::item:selected {{ background: #0A3D70; }}
+        
+        QMenu {{
+            background-color: {COLOR_BG_WHITE};
+            color: {COLOR_TEXT};
+            border: 1px solid #CCCCCC;
+        }}
+        QMenu::item {{
+            padding: 6px 20px;
+        }}
+        QMenu::item:selected {{
+            background-color: {COLOR_PRIMARY};
+            color: white;
+        }}
         
         /* RIBBON */
         QTabWidget::pane {{ border: 1px solid #DDDDDD; background: {COLOR_BG_WHITE}; border-radius: 8px; }}
@@ -90,12 +105,24 @@ class ResearchStyleSheet:
         QPushButton#accent:hover {{ background-color: #FFD700; }}
         
         /* INPUTS */
-        QLineEdit {{ 
+        QLineEdit, QComboBox, QDoubleSpinBox, QTextEdit {{ 
             border: 1px solid #CCC; 
             border-radius: 8px; 
             padding: 5px; 
-            background: white; 
+            background-color: {COLOR_BG_WHITE}; 
             color: {COLOR_TEXT};
+        }}
+
+        QComboBox QAbstractItemView {{
+            background-color: {COLOR_BG_WHITE};
+            color: {COLOR_TEXT};
+            selection-background-color: {COLOR_PRIMARY};
+            selection-color: white;
+            border: 1px solid #CCC;
+        }}
+
+        QLineEdit:focus, QComboBox:focus, QDoubleSpinBox:focus, QTextEdit:focus {{
+            border: 2px solid {COLOR_ACCENT};
         }}
         
         /* GROUP BOXES */
@@ -442,6 +469,7 @@ class MainWindow(QMainWindow):
         file_menu = menubar.addMenu("File")
         file_menu.addAction("New Session", lambda: self.on_start_session() if self.device_connected else None)
         file_menu.addAction("Open Session...", self.on_load_clicked)
+        file_menu.addAction("Import Subject Data...", self.on_import_subject)
         file_menu.addSeparator()
         file_menu.addAction("Exit", self.close)
         
@@ -469,7 +497,7 @@ class MainWindow(QMainWindow):
         # GROUP 1: SETUP
         setup_page = create_page([
             ("Connect\nDevice", pg.QtWidgets.QStyle.SP_ComputerIcon, self.on_connect_request),
-            ("Subject\nData", pg.QtWidgets.QStyle.SP_FileDialogInfoView, None)
+            ("Subject\nData", pg.QtWidgets.QStyle.SP_FileDialogInfoView, self.open_subject_data_dialog)
         ])
         self.ribbon_tabs.addTab(setup_page, "Setup")
 
@@ -505,7 +533,8 @@ class MainWindow(QMainWindow):
         grp_sub = QGroupBox("Subject Data")
         gl = QGridLayout()
         gl.addWidget(QLabel("Subject ID:"), 0,0)
-        gl.addWidget(QLineEdit("SUB-042"), 0,1)
+        self.txt_subject_id = QLineEdit("SUB-042")
+        gl.addWidget(self.txt_subject_id, 0,1)
         gl.addWidget(QLabel("Session:"), 1,0)
         gl.addWidget(QLineEdit("001"), 1,1)
         grp_sub.setLayout(gl)
@@ -834,6 +863,18 @@ class MainWindow(QMainWindow):
                 event.accept()
         else:
             event.ignore()
+    def open_subject_data_dialog(self):
+        dialog = SubjectDataDialog(self)
+        if dialog.exec():
+            self.statusBar().showMessage("Subject metadata updated successfully.", 5000)
+
+    def on_import_subject(self):
+        dlg = SubjectSelectionDialog(self)
+        if dlg.exec():
+            sub = dlg.selected_subject
+            if sub:
+                self.txt_subject_id.setText(sub[1]) # Use Name
+                self.statusBar().showMessage(f"Imported subject: {sub[1]}")
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
