@@ -17,6 +17,7 @@ class SimulateEDAStream:
         self.fs = float(sampling_rate_hz)
         self.gui_fs = float(gui_rate_hz)
 
+        # simulate eda signal
         eda_signal = nk.eda_simulate(
             duration = duration_s, 
             sampling_rate = sampling_rate_hz, 
@@ -25,8 +26,7 @@ class SimulateEDAStream:
             noise = 0.01
         )
 
-        # 2. Process the signal
-        # This decomposes into Phasic/Tonic and identifies SCR onsets/peaks
+        # decompose into phasic/tonic
         signals, info = nk.eda_process(eda_signal, sampling_rate=sampling_rate_hz)
 
         # store arrays for raw, phasic, tonic
