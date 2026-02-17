@@ -5,6 +5,7 @@ import sys
 import datetime
 import random
 import numpy as np
+import psutil
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                                QHBoxLayout, QLabel, QPushButton, QLineEdit, 
                                QGroupBox, QFrame, QStatusBar, QMenuBar, QMenu, 
@@ -35,8 +36,8 @@ class ConnectDialog(StyledDialog):
         
         self.list_widget = QListWidget()
         self.list_widget.addItems([
-            "EDA_DEVICE_A1 (RSSI: -45dBm | Bat: 98%)", 
-            "EDA_DEVICE_B2 (RSSI: -72dBm | Bat: 45%)"
+            "EDA_DEVICE_A1", 
+            "EDA_DEVICE_B2"
         ])
         self.layout_main.addWidget(self.list_widget)
         
@@ -54,15 +55,15 @@ class ConnectDialog(StyledDialog):
         self.layout_main.addLayout(btn_box)
 
 class ExitDialog(StyledDialog):
-    def __init__(self, parent=None):
-        super().__init__("Save Session?", parent)
+    def __init__(self, parent=None, title="Save Session?", header="End Session", text="Do you want to save the session before exiting?"):
+        super().__init__(title, parent)
         self.setFixedSize(400, 180)
         
-        header = QLabel("End Session")
-        header.setObjectName("h1")
-        self.layout_main.addWidget(header)
+        lbl_header = QLabel(header)
+        lbl_header.setObjectName("h1")
+        self.layout_main.addWidget(lbl_header)
         
-        self.layout_main.addWidget(QLabel("Do you want to save the session before exiting?"))
+        self.layout_main.addWidget(QLabel(text))
         
         btn_box = QHBoxLayout()
         self.btn_save = QPushButton("Save")
@@ -122,8 +123,8 @@ class RibbonButton(QToolButton):
 class BioSignalPlot(QWidget):
     def __init__(self, title, left_label, left_unit, right_label=None, right_unit=None):
         super().__init__()
-        self.layout = QVBoxLayout(self) # type: ignore
-        self.layout.setContentsMargins(0, 0, 0, 0) # type: ignore
+        self.main_layout = QVBoxLayout(self) # type: ignore
+        self.main_layout.setContentsMargins(0, 0, 0, 0) # type: ignore
         
         # Configuration
         pg.setConfigOption('background', 'w')
@@ -132,12 +133,13 @@ class BioSignalPlot(QWidget):
 
         self.plot_widget = pg.PlotWidget(title=title)
         self.plot_widget.showGrid(x=True, y=True, alpha=0.3)
+        self.plot_widget.plotItem.setMouseEnabled(x=True, y=False)
         self.legend = self.plot_widget.addLegend(offset=(10, 10))
         self.legend.setBrush(pg.mkBrush(255,255,255,200)) # Semi-transparent white
         self.plot_widget.setLabel('bottom', "Time", units='s')
         self.plot_widget.setLabel('left', left_label, units=left_unit)
         
-        self.layout.addWidget(self.plot_widget)
+        self.main_layout.addWidget(self.plot_widget)
         
         # Data Containers (Strip Chart Logic)
         self.buffer_size = 300
@@ -167,6 +169,7 @@ class BioSignalPlot(QWidget):
             # Setup ViewBox for Right Axis
             self.plot_item = self.plot_widget.plotItem
             self.vb2 = pg.ViewBox()
+            self.vb2.setMouseEnabled(x=True, y=False)
             self.plot_item.showAxis('right')
             self.plot_item.scene().addItem(self.vb2)
             self.plot_item.getAxis('right').linkToView(self.vb2)
@@ -259,10 +262,6 @@ class BioSignalPlot(QWidget):
         # Update Curves with new coordinate systems
         self.curve1.setData(self.x_data, self.data1)
         self.curve2.setData(self.x_data, self.data2)
-        
-        # Scroll the view to keep the right edge at new_time
-        # Show roughly 10-15 seconds history
-        self.plot_widget.setXRange(new_time - 15, new_time)
 
 # --- MAIN WINDOW ---
 class MainWindow(QMainWindow):
@@ -347,34 +346,34 @@ class MainWindow(QMainWindow):
 
         # GROUP 1: SETUP
         setup_page = create_page([
-            ("Connect\nDevice", pg.QtWidgets.QStyle.SP_ComputerIcon, self.on_connect_request),
-            ("Subject\nData", pg.QtWidgets.QStyle.SP_FileDialogInfoView, self.open_subject_data_dialog),
-            ("Hardware\nDiagnostics", pg.QtWidgets.QStyle.SP_DriveHDIcon, lambda: QMessageBox.information(self, "Diagnostics", "Running Hardware Diagnostics..."))
+            ("Connect\nDevice", QStyle.SP_ComputerIcon, self.on_connect_request),
+            ("Subject\nData", QStyle.SP_FileDialogInfoView, self.open_subject_data_dialog),
+            ("Hardware\nDiagnostics", QStyle.SP_DriveHDIcon, lambda: QMessageBox.information(self, "Diagnostics", "Running Hardware Diagnostics..."))
         ])
         self.ribbon_tabs.addTab(setup_page, "Setup")
 
         # GROUP 2: RECORDING
         # Using built-in icons to approximate Gear/Waveform
         acq_page = create_page([
-            ("Hardware\nConfig", pg.QtWidgets.QStyle.SP_FileDialogDetailedView, None), # Gear-ish
-            ("Noise\nThresholds", pg.QtWidgets.QStyle.SP_DriveNetIcon, None), # Waveform-ish
-            ("Activity\nProfile", pg.QtWidgets.QStyle.SP_MediaSeekForward, None) # Motion-ish
+            ("Hardware\nConfig", QStyle.SP_FileDialogDetailedView, None), # Gear-ish
+            ("Noise\nThresholds", QStyle.SP_DriveNetIcon, None), # Waveform-ish
+            ("Activity\nProfile", QStyle.SP_MediaSeekForward, None) # Motion-ish
         ])
         self.ribbon_tabs.addTab(acq_page, "Recording")
         
         # GROUP 3: ANALYSIS
         ana_page = create_page([
-            ("Run\ncvxEDA", pg.QtWidgets.QStyle.SP_MediaPlay, lambda: QMessageBox.information(self, "Info", "Optimization Started")),
-            ("Filter\nConfig", pg.QtWidgets.QStyle.SP_FileDialogListView, None),
-            ("HRV\nDashboard", pg.QtWidgets.QStyle.SP_FileDialogContentsView, lambda: QMessageBox.information(self, "HRV", "Opening HRV Dashboard..."))
+            ("Run\ncvxEDA", QStyle.SP_MediaPlay, lambda: QMessageBox.information(self, "Info", "Optimization Started")),
+            ("Filter\nConfig", QStyle.SP_FileDialogListView, None),
+            ("HRV\nDashboard", QStyle.SP_FileDialogContentsView, lambda: QMessageBox.information(self, "HRV", "Opening HRV Dashboard..."))
         ])
         self.ribbon_tabs.addTab(ana_page, "Analysis")
         
         # GROUP 4: EXPORT
         exp_page = create_page([
-            ("Export\nCSV", pg.QtWidgets.QStyle.SP_FileIcon, lambda: print("Exporting CSV...")),
-            ("Save Graph\nImage", pg.QtWidgets.QStyle.SP_DialogSaveButton, lambda: print("Saving Image...")),
-            ("Generate\nLab Report", pg.QtWidgets.QStyle.SP_MessageBoxInformation, lambda: print("Generating Report..."))
+            ("Export\nCSV", QStyle.SP_FileIcon, lambda: print("Exporting CSV...")),
+            ("Save Graph\nImage", QStyle.SP_DialogSaveButton, lambda: print("Saving Image...")),
+            ("Generate\nLab Report", QStyle.SP_MessageBoxInformation, lambda: print("Generating Report..."))
         ])
         self.ribbon_tabs.addTab(exp_page, "Export")
 
@@ -429,14 +428,11 @@ class MainWindow(QMainWindow):
         self.lbl_conn.setStyleSheet("color: #777; border: 2px dashed #CCC; padding: 15px; border-radius: 8px;")
         dl.addWidget(self.lbl_conn)
         
-        t_grid = QGridLayout()
-        t_grid.addWidget(QLabel("Battery:"), 0, 0)
-        self.lbl_batt = QLabel("-- %")
-        t_grid.addWidget(self.lbl_batt, 0, 1)
-        t_grid.addWidget(QLabel("Signal:"), 1, 0)
-        self.lbl_sig = QLabel("-- dBm")
-        t_grid.addWidget(self.lbl_sig, 1, 1)
-        dl.addLayout(t_grid)
+        self.btn_disconnect = QPushButton("Disconnect")
+        self.btn_disconnect.setEnabled(False)
+        self.btn_disconnect.clicked.connect(self.on_disconnect)
+        dl.addWidget(self.btn_disconnect)
+        
         grp_dev.setLayout(dl)
         layout.addWidget(grp_dev)
         
@@ -446,6 +442,7 @@ class MainWindow(QMainWindow):
         self.btn_rec = QPushButton("REC")
         self.btn_rec.setCheckable(True)
         self.btn_rec.setFixedSize(100, 100)
+        self.btn_rec.setEnabled(False)
         self.btn_rec.setStyleSheet(f"""
             QPushButton {{ 
                 background-color: #F0F0F0; 
@@ -476,19 +473,22 @@ class MainWindow(QMainWindow):
         playback_layout = QHBoxLayout()
         playback_layout.setSpacing(5)
         
-        btn_start = QPushButton("Start")
-        btn_start.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
-        btn_start.clicked.connect(self.on_start_sim)
+        self.btn_sim_start = QPushButton("Start")
+        self.btn_sim_start.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+        self.btn_sim_start.clicked.connect(self.on_start_sim)
+        self.btn_sim_start.setEnabled(False)
         
-        btn_pause = QPushButton("Pause")
-        btn_pause.setIcon(self.style().standardIcon(QStyle.SP_MediaPause))
-        btn_pause.clicked.connect(self.on_pause_sim)
+        self.btn_sim_pause = QPushButton("Pause")
+        self.btn_sim_pause.setIcon(self.style().standardIcon(QStyle.SP_MediaPause))
+        self.btn_sim_pause.clicked.connect(self.on_pause_sim)
+        self.btn_sim_pause.setEnabled(False)
         
-        btn_stop = QPushButton("Stop")
-        btn_stop.setIcon(self.style().standardIcon(QStyle.SP_MediaStop))
-        btn_stop.clicked.connect(self.on_stop_sim)
+        self.btn_sim_stop = QPushButton("Stop")
+        self.btn_sim_stop.setIcon(self.style().standardIcon(QStyle.SP_MediaStop))
+        self.btn_sim_stop.clicked.connect(self.on_stop_sim)
+        self.btn_sim_stop.setEnabled(False)
         
-        for btn in [btn_start, btn_pause, btn_stop]:
+        for btn in [self.btn_sim_start, self.btn_sim_pause, self.btn_sim_stop]:
             btn.setStyleSheet(f"""
                 QPushButton {{
                     background-color: {COLOR_BG_WHITE};
@@ -520,7 +520,7 @@ class MainWindow(QMainWindow):
         l_dash.setAlignment(Qt.AlignCenter)
         
         title = QLabel("EDA Research Platform")
-        title.setFont(QFont(FONT_UI, 32, QFont.Bold))
+        title.setFont(QFont(FONT_UI, 32, QFont.Weight.Bold))
         title.setStyleSheet(f"color: {COLOR_PRIMARY}")
         
         self.btn_start = QPushButton("Start New Session")
@@ -590,22 +590,27 @@ class MainWindow(QMainWindow):
         
         # Live Metrics
         grp_met = QGroupBox("Live Metrics")
-        vl = QVBoxLayout()
+        hl = QHBoxLayout()
         
+        # EDA Column
+        v_eda = QVBoxLayout()
+        v_eda.addWidget(QLabel("Skin Conductance:"))
         self.val_eda = QLabel("-- µS")
         self.val_eda.setFont(QFont(FONT_MONO, 24, QFont.Bold))
         self.val_eda.setStyleSheet(f"color: {COLOR_EDA}")
+        v_eda.addWidget(self.val_eda)
         
+        # HR Column
+        v_hr = QVBoxLayout()
+        v_hr.addWidget(QLabel("Heart Rate:"))
         self.val_hr = QLabel("-- BPM")
-        self.val_hr.setFont(QFont(FONT_MONO, 24, QFont.Bold))
+        self.val_hr.setFont(QFont(FONT_MONO, 24, QFont.Weight.Bold)) # type: ignore
         self.val_hr.setStyleSheet(f"color: {COLOR_HR}")
+        v_hr.addWidget(self.val_hr)
         
-        vl.addWidget(QLabel("Skin Conductance:"))
-        vl.addWidget(self.val_eda)
-        vl.addSpacing(20)
-        vl.addWidget(QLabel("Heart Rate:"))
-        vl.addWidget(self.val_hr)
-        grp_met.setLayout(vl)
+        hl.addLayout(v_eda)
+        hl.addLayout(v_hr)
+        grp_met.setLayout(hl)
         layout.addWidget(grp_met)
         
         # Flag Management
@@ -629,11 +634,6 @@ class MainWindow(QMainWindow):
         
         layout.addStretch()
 
-    def create_status_bar(self):
-        sb = QStatusBar()
-        self.setStatusBar(sb)
-        sb.showMessage("System Ready - Connect Device to Begin")
-
     # --- LOGIC ---
     def on_connect_request(self):
         dlg = ConnectDialog(self)
@@ -643,15 +643,42 @@ class MainWindow(QMainWindow):
             # Update UI
             self.lbl_conn.setText("CONNECTED")
             self.lbl_conn.setStyleSheet("color: green; border: 2px solid green; font-weight: bold; border-radius: 8px; background: #E8F5E9;")
-            self.lbl_batt.setText("98%")
-            self.lbl_sig.setText("-45 dBm")
             
             self.btn_start.setEnabled(True)
             self.btn_start.setText("Start Live Session")
+            self.btn_disconnect.setEnabled(True)
+            
             self.statusBar().showMessage("Device Connected.")
+
+    def on_disconnect(self):
+        self.device_connected = False
+        self.lbl_conn.setText("DISCONNECTED")
+        self.lbl_conn.setStyleSheet("color: #777; border: 2px dashed #CCC; padding: 15px; border-radius: 8px;")
+        
+        self.btn_start.setEnabled(False)
+        self.btn_start.setText("Start New Session")
+        self.btn_disconnect.setEnabled(False)
+        
+        if self.timer.isActive():
+            self.timer.stop()
+            
+        # Disable Recording Controls
+        if self.btn_rec.isChecked():
+            self.btn_rec.setChecked(False)
+        self.btn_rec.setEnabled(False)
+        self.btn_sim_start.setEnabled(False)
+        self.btn_sim_pause.setEnabled(False)
+        self.btn_sim_stop.setEnabled(False)
+        self.statusBar().showMessage("Device Disconnected.")
 
     def on_start_session(self):
         if not self.device_connected: return
+        
+        # Enable Recording Controls
+        self.btn_rec.setEnabled(True)
+        self.btn_sim_start.setEnabled(True)
+        self.btn_sim_pause.setEnabled(True)
+        self.btn_sim_stop.setEnabled(True)
         
         # Switch View
         self.center_stack.setCurrentIndex(1)
@@ -661,6 +688,8 @@ class MainWindow(QMainWindow):
         self.graph_sub.reset_data()
         
         self.statusBar().showMessage("Session Active. Press REC to start data stream.")
+        self.on_start_sim()
+        self.statusBar().showMessage("Session Active. Data stream started.")
 
     def on_load_clicked(self):
         QFileDialog.getOpenFileName(self, "Load Data", "", "CSV Files (*.csv)")
@@ -703,24 +732,43 @@ class MainWindow(QMainWindow):
             'item': item
         })
 
+    def update_status_bar_stats(self):
+        # Time
+        self.lbl_time.setText(f"System Time: {datetime.datetime.now().strftime('%H:%M:%S')}")
+        
+        # Hardware Stats
+        try:
+            disk = psutil.disk_usage('/')
+            free_gb = disk.free / (1024**3)
+            self.lbl_disk.setText(f"Disk: {free_gb:.1f}GB Free")
+            
+            ram = psutil.virtual_memory()
+            self.lbl_ram.setText(f"RAM: {ram.percent}% Used")
+            
+            cpu = psutil.cpu_percent()
+            self.lbl_cpu.setText(f"CPU: {cpu}%")
+        except Exception:
+            pass
+
     def create_status_bar(self):
 
         status = QStatusBar()
 
         self.setStatusBar(status)
+        status.showMessage("System Ready - Connect Device to Begin")
 
         
 
         # Permanent widgets
 
-        self.lbl_disk = QLabel("Disk: 45GB Free")
-
-        self.lbl_ram = QLabel("RAM: 12% Used")
-
+        self.lbl_cpu = QLabel("CPU: --")
+        self.lbl_disk = QLabel("Disk: --")
+        self.lbl_ram = QLabel("RAM: --")
         self.lbl_time = QLabel()
 
         
 
+        status.addPermanentWidget(self.lbl_cpu)
         status.addPermanentWidget(self.lbl_disk)
 
         status.addPermanentWidget(self.lbl_ram)
@@ -730,12 +778,10 @@ class MainWindow(QMainWindow):
         
 
         # Update time
-
-        timer = QTimer(self)
-
-        timer.timeout.connect(lambda: self.lbl_time.setText(f"System Time: {datetime.datetime.now().strftime('%H:%M:%S')}"))
-
-        timer.start(1000)
+        self.status_timer = QTimer(self)
+        self.status_timer.timeout.connect(self.update_status_bar_stats)
+        self.status_timer.start(1000)
+        self.update_status_bar_stats()
 
 
 
@@ -770,10 +816,17 @@ class MainWindow(QMainWindow):
         self.timer.stop()
 
     def on_stop_sim(self):
+        was_running = self.timer.isActive()
         self.timer.stop()
-        self.graph_main.reset_data()
-        self.graph_sub.reset_data()
-        print("Session Stopped and Graphs Cleared")
+        
+        dlg = ExitDialog(self, "Stop Session?", "Stop Recording", "Do you want to save the recorded data?")
+        if dlg.exec() == QDialog.Accepted:
+            if dlg.action == 'save':
+                print("Saving Session Data...")
+            elif dlg.action == 'discard':
+                print("Session Stopped")
+        elif was_running:
+            self.timer.start()
 
     def closeEvent(self, event):
         dlg = ExitDialog(self)
