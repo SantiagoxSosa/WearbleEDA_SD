@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                                QSizePolicy, QSplitter, QAbstractItemView)
 from PySide6.QtCore import Qt, QTimer, QSize, QTime
 from PySide6.QtGui import QAction, QFont, QIcon, QColor, QPalette
-
+from backend.eda import SimulateEDAStream
 import pyqtgraph as pg
 
 # --- DESIGN SYSTEM CONSTANTS (DREXEL UNIVERSITY) ---
@@ -385,6 +385,30 @@ class BioSignalPlot(QWidget):
         # Show roughly 10-15 seconds history
         self.plot_widget.setXRange(new_time - 15, new_time)
 
+    def push(self, y1, y2=None):
+        """
+        Push a new sample into the chart buffer.
+        y2 is optional
+        """
+         # shift time
+        dt = 1.0 / self.fs
+        new_time = self.x_data[-1] + dt
+
+        self.x_data[:-1] = self.x_data[1:]
+        self.x_data[-1] = new_time
+
+        # shift y buffers
+        self.data1[:-1] = self.data1[1:]
+        self.data1[-1] = y1
+
+        self.data2[:-1] = self.data2[1:]
+        self.data2[-1] = (y2 if y2 is not None else self.data2[-2])
+
+        # redraw
+        self.curve1.setData(self.x_data, self.data1)
+        self.curve2.setData(self.x_data, self.data2)
+        self.plot_widget.setXRange(new_time - 15, new_time)
+
 # --- MAIN WINDOW ---
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -399,6 +423,9 @@ class MainWindow(QMainWindow):
         
         QApplication.instance().setStyleSheet(ResearchStyleSheet.get_stylesheet())
         self.setup_ui()
+
+        # create data stream
+        self.eda_stream = SimulateEDAStream(duration_s=30, sampling_rate_hz=1000, gui_rate_hz=20)
         
         # Simulation Timer
         self.timer = QTimer()
@@ -708,6 +735,9 @@ class MainWindow(QMainWindow):
     def on_start_session(self):
         if not self.device_connected: return
         
+        # reset data stream
+        self.eda_stream.reset()
+
         # Switch View
         self.center_stack.setCurrentIndex(1)
         
@@ -811,9 +841,22 @@ class MainWindow(QMainWindow):
             self.list_flags.takeItem(row)
 
     def game_loop(self):
+        
+        """
         # Update Graphs
         self.graph_main.update_step(self.is_recording)
         self.graph_sub.update_step(self.is_recording)
+        """
+
+        # new update graphs
+        if self.is_recording:
+            raw, phasic, tonic = self.eda_stream.next()
+
+            # heart rate placeholder
+            hr_placeholder = self.graph_main.data2[-1]
+
+            self.graph_main.push(raw, hr_placeholder)
+            self.graph_sub.push(phasic, tonic)
         
         # Update Metrics
         if self.device_connected and self.is_recording:

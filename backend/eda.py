@@ -27,7 +27,7 @@ class SimulateEDAStream:
 
         # 2. Process the signal
         # This decomposes into Phasic/Tonic and identifies SCR onsets/peaks
-        signals, info = nk.eda_proces(eda_signal, sampling_rate=sampling_rate_hz)
+        signals, info = nk.eda_process(eda_signal, sampling_rate=sampling_rate_hz)
 
         # store arrays for raw, phasic, tonic
         self.raw = np.asarray(signals["EDA_Raw"])
