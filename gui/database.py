@@ -35,6 +35,7 @@ class DatabaseManager:
                 VALUES (?, ?, ?, ?)
             """, (name, sex, height, notes))
             conn.commit()
+            return cursor.lastrowid
 
     def get_all_subjects(self):
         """Retrieves all subjects from the database."""
@@ -146,8 +147,8 @@ class SubjectDataDialog(QDialog):
 
         # Database Insertion
         try:
-            self.db_manager.insert_subject(name, sex, height_cm, notes)
-            self.saved_data = (name, sex, height_cm, notes)
+            new_id = self.db_manager.insert_subject(name, sex, height_cm, notes)
+            self.saved_data = (new_id, name, sex, height_cm, notes)
             print("Subject saved to database.")
             self.accept() # Closes dialog successfully
         except Exception as e:

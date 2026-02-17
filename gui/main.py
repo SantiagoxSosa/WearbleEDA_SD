@@ -497,29 +497,33 @@ class MainWindow(QMainWindow):
         # GROUP 1: SETUP
         setup_page = create_page([
             ("Connect\nDevice", pg.QtWidgets.QStyle.SP_ComputerIcon, self.on_connect_request),
-            ("Subject\nData", pg.QtWidgets.QStyle.SP_FileDialogInfoView, self.open_subject_data_dialog)
+            ("Subject\nData", pg.QtWidgets.QStyle.SP_FileDialogInfoView, self.open_subject_data_dialog),
+            ("Hardware\nDiagnostics", pg.QtWidgets.QStyle.SP_DriveHDIcon, lambda: QMessageBox.information(self, "Diagnostics", "Running Hardware Diagnostics..."))
         ])
         self.ribbon_tabs.addTab(setup_page, "Setup")
 
         # GROUP 2: RECORDING
         # Using built-in icons to approximate Gear/Waveform
         acq_page = create_page([
-            ("Recording\nSettings", pg.QtWidgets.QStyle.SP_FileDialogDetailedView, None), # Gear-ish
-            ("Tolerances", pg.QtWidgets.QStyle.SP_DriveNetIcon, None) # Waveform-ish
+            ("Hardware\nConfig", pg.QtWidgets.QStyle.SP_FileDialogDetailedView, None), # Gear-ish
+            ("Noise\nThresholds", pg.QtWidgets.QStyle.SP_DriveNetIcon, None), # Waveform-ish
+            ("Activity\nProfile", pg.QtWidgets.QStyle.SP_MediaSeekForward, None) # Motion-ish
         ])
         self.ribbon_tabs.addTab(acq_page, "Recording")
         
         # GROUP 3: ANALYSIS
         ana_page = create_page([
             ("Run\ncvxEDA", pg.QtWidgets.QStyle.SP_MediaPlay, lambda: QMessageBox.information(self, "Info", "Optimization Started")),
-            ("Filter\nConfig", pg.QtWidgets.QStyle.SP_FileDialogListView, None)
+            ("Filter\nConfig", pg.QtWidgets.QStyle.SP_FileDialogListView, None),
+            ("HRV\nDashboard", pg.QtWidgets.QStyle.SP_FileDialogContentsView, lambda: QMessageBox.information(self, "HRV", "Opening HRV Dashboard..."))
         ])
         self.ribbon_tabs.addTab(ana_page, "Analysis")
         
         # GROUP 4: EXPORT
         exp_page = create_page([
             ("Export\nCSV", pg.QtWidgets.QStyle.SP_FileIcon, lambda: print("Exporting CSV...")),
-            ("Save Graph\nImage", pg.QtWidgets.QStyle.SP_DialogSaveButton, lambda: print("Saving Image..."))
+            ("Save Graph\nImage", pg.QtWidgets.QStyle.SP_DialogSaveButton, lambda: print("Saving Image...")),
+            ("Generate\nLab Report", pg.QtWidgets.QStyle.SP_MessageBoxInformation, lambda: print("Generating Report..."))
         ])
         self.ribbon_tabs.addTab(exp_page, "Export")
 
