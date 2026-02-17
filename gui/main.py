@@ -13,6 +13,11 @@ from PySide6.QtGui import QAction, QFont, QIcon, QColor, QPalette
 from backend.eda import SimulateEDAStream
 import pyqtgraph as pg
 
+# debug
+print("RUNNING:", __file__)
+print("PYTHON:", sys.executable)
+print("CWD:", __import__("os").getcwd())
+
 # --- DESIGN SYSTEM CONSTANTS (DREXEL UNIVERSITY) ---
 COLOR_PRIMARY = "#07294D"   # Drexel Blue
 COLOR_ACCENT  = "#FFC600"   # Drexel Gold
@@ -415,6 +420,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Drexel EDA Lab Platform [Research Grade]")
         self.resize(1400, 950)
+        self._tick = 0
         
         # State
         self.device_connected = False
@@ -847,17 +853,24 @@ class MainWindow(QMainWindow):
         self.graph_main.update_step(self.is_recording)
         self.graph_sub.update_step(self.is_recording)
         """
+        # debug
+        self._tick += 1
+        if self._tick % 20 == 0:  # ~once/sec at 20 Hz
+            print("tick", self._tick, "recording:", self.is_recording, "connected:", self.device_connected)
+
 
         # new update graphs
+        raw, phasic, tonic = self.eda_stream.next()
+        hr_placeholder = self.graph_main.data2[-1]
+        self.graph_main.push(raw, hr_placeholder)
+        self.graph_sub.push(phasic, tonic)
+
+        # FIXME implement data logging
+        '''
         if self.is_recording:
-            raw, phasic, tonic = self.eda_stream.next()
+            self.data_logger.write(raw, phasic, tonic)
+        '''    
 
-            # heart rate placeholder
-            hr_placeholder = self.graph_main.data2[-1]
-
-            self.graph_main.push(raw, hr_placeholder)
-            self.graph_sub.push(phasic, tonic)
-        
         # Update Metrics
         if self.device_connected and self.is_recording:
             val_eda = self.graph_main.data1[-1]
