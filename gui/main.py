@@ -1,5 +1,7 @@
 from database import SubjectDataDialog, SubjectSelectionDialog
-from colorconstraints import *
+from hardwareDiagnostics import HardwareDiagnosticsDialog
+from activity import ActivityProfileDialog
+from colorConstraints import *
 
 import sys
 import datetime
@@ -348,7 +350,7 @@ class MainWindow(QMainWindow):
         setup_page = create_page([
             ("Connect\nDevice", QStyle.SP_ComputerIcon, self.on_connect_request),
             ("Subject\nData", QStyle.SP_FileDialogInfoView, self.open_subject_data_dialog),
-            ("Hardware\nDiagnostics", QStyle.SP_DriveHDIcon, lambda: QMessageBox.information(self, "Diagnostics", "Running Hardware Diagnostics..."))
+            ("Hardware\nDiagnostics", pg.QtWidgets.QStyle.SP_DriveHDIcon, self.open_diagnostics)
         ])
         self.ribbon_tabs.addTab(setup_page, "Setup")
 
@@ -357,7 +359,7 @@ class MainWindow(QMainWindow):
         acq_page = create_page([
             ("Hardware\nConfig", QStyle.SP_FileDialogDetailedView, None), # Gear-ish
             ("Noise\nThresholds", QStyle.SP_DriveNetIcon, None), # Waveform-ish
-            ("Activity\nProfile", QStyle.SP_MediaSeekForward, None) # Motion-ish
+            ("Activity\nProfile", QStyle.SP_MediaSeekForward, self.open_activity_profile) # Motion-ish
         ])
         self.ribbon_tabs.addTab(acq_page, "Recording")
         
@@ -869,6 +871,14 @@ class MainWindow(QMainWindow):
                 self.txt_sub_height.setText(str(sub[3]))
                 self.txt_sub_notes.setText(sub[4])
                 self.statusBar().showMessage(f"Imported subject: {sub[1]}")
+
+    def open_diagnostics(self):
+        dlg = HardwareDiagnosticsDialog(self)
+        dlg.exec()
+
+    def open_activity_profile(self):
+        dlg = ActivityProfileDialog(self)
+        dlg.exec()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
