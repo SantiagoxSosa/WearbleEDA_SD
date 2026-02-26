@@ -404,10 +404,10 @@ class MainWindow(QMainWindow):
         self.txt_sub_sex.setReadOnly(True)
         gl.addWidget(self.txt_sub_sex, 2, 1)
 
-        gl.addWidget(QLabel("Height: "), 3, 0)
-        self.txt_sub_height = QLineEdit()
-        self.txt_sub_height.setReadOnly(True)
-        gl.addWidget(self.txt_sub_height, 3, 1)
+        gl.addWidget(QLabel("Age: "), 3, 0)
+        self.txt_sub_age = QLineEdit()
+        self.txt_sub_age.setReadOnly(True)
+        gl.addWidget(self.txt_sub_age, 3, 1)
 
         gl.addWidget(QLabel("Notes:"), 4, 0)
         self.txt_sub_notes = QTextEdit()
@@ -846,17 +846,17 @@ class MainWindow(QMainWindow):
         if dialog.exec():
             # If data was saved, populate the left panel
             if dialog.saved_data:
-                if len(dialog.saved_data) == 5:
-                    sid, name, sex, height, notes = dialog.saved_data
-                    self.txt_sub_id.setText(str(sid))
-                else:
-                    name, sex, height, notes = dialog.saved_data
-                    self.txt_sub_id.setText("New")
+                # Unpack new schema: (id, subject_id, name, age, sex, ethnicity, handedness, notes)
+                data = dialog.saved_data
+                # Handle potential legacy data or new data safely
+                if len(data) >= 8:
+                    sid, subject_id, name, age, sex, ethnicity, handedness, notes = data
+                    self.txt_sub_id.setText(subject_id)
+                    self.txt_sub_name.setText(name)
+                    self.txt_sub_sex.setText(sex)
+                    self.txt_sub_age.setText(str(age))
+                    self.txt_sub_notes.setText(notes)
 
-                self.txt_sub_name.setText(name)
-                self.txt_sub_sex.setText(sex)
-                self.txt_sub_height.setText(str(height))
-                self.txt_sub_notes.setText(notes)
             self.statusBar().showMessage("Subject metadata updated successfully.", 5000)
 
     def on_import_subject(self):
@@ -864,13 +864,13 @@ class MainWindow(QMainWindow):
         if dlg.exec():
             sub = dlg.selected_subject
             if sub:
-                # sub is tuple: (id, name, sex, height, notes)
-                self.txt_sub_id.setText(str(sub[0]))
-                self.txt_sub_name.setText(sub[1])
-                self.txt_sub_sex.setText(sub[2])
-                self.txt_sub_height.setText(str(sub[3]))
-                self.txt_sub_notes.setText(sub[4])
-                self.statusBar().showMessage(f"Imported subject: {sub[1]}")
+                # sub is tuple: (id, subject_id, name, age, sex, ethnicity, handedness, notes)
+                self.txt_sub_id.setText(sub[1])
+                self.txt_sub_name.setText(sub[2])
+                self.txt_sub_sex.setText(sub[4])
+                self.txt_sub_age.setText(str(sub[3]))
+                self.txt_sub_notes.setText(sub[7])
+                self.statusBar().showMessage(f"Imported subject: {sub[2]}")
 
     def open_diagnostics(self):
         dlg = HardwareDiagnosticsDialog(self)

@@ -1,7 +1,8 @@
 import sqlite3
+import datetime
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QFormLayout, QHBoxLayout, 
                                QLabel, QLineEdit, QComboBox, QDoubleSpinBox, 
-                               QTextEdit, QPushButton, QMessageBox, QListWidget, 
+                               QTextEdit, QPushButton, QMessageBox, QListWidget,
                                QListWidgetItem)
 from PySide6.QtCore import Qt
 
@@ -18,22 +19,25 @@ class DatabaseManager:
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS subjects (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    subject_id TEXT NOT NULL,
                     name TEXT NOT NULL,
+                    age INTEGER NOT NULL,
                     sex TEXT NOT NULL,
-                    height REAL NOT NULL,
-                    notes TEXT NOT NULL
+                    ethnicity TEXT NOT NULL,
+                    handedness TEXT NOT NULL,
+                    notes TEXT
                 )
             """)
             conn.commit()
 
-    def insert_subject(self, name, sex, height, notes):
+    def insert_subject(self, subject_id, name, age, sex, ethnicity, handedness, notes):
         """Inserts a new subject into the database."""
         with sqlite3.connect(self.db_name) as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                INSERT INTO subjects (name, sex, height, notes)
-                VALUES (?, ?, ?, ?)
-            """, (name, sex, height, notes))
+                INSERT INTO subjects (subject_id, name, age, sex, ethnicity, handedness, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (subject_id, name, age, sex, ethnicity, handedness, notes))
             conn.commit()
             return cursor.lastrowid
 
@@ -41,7 +45,7 @@ class DatabaseManager:
         """Retrieves all subjects from the database."""
         with sqlite3.connect(self.db_name) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT id, name, sex, height, notes FROM subjects")
+            cursor.execute("SELECT id, subject_id, name, age, sex, ethnicity, handedness, notes FROM subjects")
             return cursor.fetchall()
 
     def delete_subject(self, subject_id):
@@ -75,23 +79,33 @@ class SubjectDataDialog(QDialog):
         form_layout.setSpacing(15)
 
         self.input_name = QLineEdit()
-        self.input_name.setPlaceholderText("e.g., John Doe")
+
+        self.input_age = QLineEdit()
 
         self.input_sex = QComboBox()
-        self.input_sex.addItems(["Select...", "Male", "Female", "Other"])
+        self.input_sex.addItems(["Select...", "Male", "Female", "Intersex", "Prefer not to answer"])
 
-        # Height input configured for Inches
-        self.input_height = QLineEdit()
-        self.input_height.setPlaceholderText("e.g. 180.5")
+        self.input_ethnicity = QComboBox()
+        self.input_ethnicity.addItems([
+            "Select...", "American Indian or Alaska Native", "Asian", 
+            "Black or African American", "Hispanic or Latino", 
+            "Native Hawaiian or Other Pacific Islander", "White", 
+            "More than one race", "Unknown or Not Reported"
+        ])
+
+        self.input_handedness = QComboBox()
+        self.input_handedness.addItems(["Select...", "Right-handed", "Left-handed", "Ambidextrous"])
 
         self.input_notes = QTextEdit()
-        self.input_notes.setPlaceholderText("Pre-existing conditions, resting heart rate baseline, etc.")
+        self.input_notes.setPlaceholderText("Clinical observations...")
         self.input_notes.setMaximumHeight(100)
 
-        form_layout.addRow("Name:", self.input_name)
-        form_layout.addRow("Sex:", self.input_sex)
-        form_layout.addRow("Height (cm):", self.input_height)
-        form_layout.addRow("Notes:", self.input_notes)
+        form_layout.addRow("Full Name:", self.input_name)
+        form_layout.addRow("Age:", self.input_age)
+        form_layout.addRow("Sex at Birth:", self.input_sex)
+        form_layout.addRow("Race/Ethnicity:", self.input_ethnicity)
+        form_layout.addRow("Handedness:", self.input_handedness)
+        form_layout.addRow("Clinical Notes:", self.input_notes)
 
         main_layout.addLayout(form_layout)
         main_layout.addStretch()
@@ -118,38 +132,44 @@ class SubjectDataDialog(QDialog):
 
     def validate_and_save(self):
         name = self.input_name.text().strip()
+        age_text = self.input_age.text().strip()
         sex = self.input_sex.currentText()
-        height_str = self.input_height.text().strip()
+        ethnicity = self.input_ethnicity.currentText()
+        handedness = self.input_handedness.currentText()
         notes = self.input_notes.toPlainText().strip()
 
         # Strict Validation
         if not name:
             QMessageBox.warning(self, "Validation Error", "Name cannot be empty.")
             return
+        
+        try:
+            age = int(age_text)
+        except ValueError:
+            QMessageBox.warning(self, "Validation Error", "Age must be a valid number.")
+            return
+
+        if age <= 0:
+            QMessageBox.warning(self, "Validation Error", "Age must be greater than 0.")
+            return
         if sex == "Select...":
             QMessageBox.warning(self, "Validation Error", "Please select a valid Sex.")
             return
-        
-        try:
-            height_in = float(height_str)
-            if height_in <= 0:
-                raise ValueError
-        except ValueError:
-            QMessageBox.warning(self, "Validation Error", "Height must be a valid number greater than 0.")
+        if ethnicity == "Select...":
+            QMessageBox.warning(self, "Validation Error", "Please select a valid Ethnicity.")
             return
-        if not notes:
-            QMessageBox.warning(self, "Validation Error", "Notes cannot be empty.")
+        if handedness == "Select...":
+            QMessageBox.warning(self, "Validation Error", "Please select a valid Handedness.")
             return
 
-        # Convert inches to cm for standardized medical storage
-        # lol its actually just in cm
-        height_cm = height_in
+        # Auto-generate Subject ID
+        subject_id = f"SUB-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
 
         # Database Insertion
         try:
-            new_id = self.db_manager.insert_subject(name, sex, height_cm, notes)
-            self.saved_data = (new_id, name, sex, height_cm, notes)
-            print("Subject saved to database.")
+            new_id = self.db_manager.insert_subject(subject_id, name, age, sex, ethnicity, handedness, notes)
+            self.saved_data = (new_id, subject_id, name, age, sex, ethnicity, handedness, notes)
+            print(f"Subject {subject_id} saved to database.")
             self.accept() # Closes dialog successfully
         except Exception as e:
             QMessageBox.critical(self, "Database Error", f"Failed to save subject:\n{str(e)}")
@@ -159,10 +179,12 @@ class SubjectDataDialog(QDialog):
         if dlg.exec():
             sub = dlg.selected_subject
             if sub:
-                self.input_name.setText(sub[1])
-                self.input_sex.setCurrentText(sub[2])
-                self.input_height.setText(str(sub[3]))
-                self.input_notes.setText(sub[4])
+                self.input_name.setText(sub[2])
+                self.input_age.setText(str(sub[3]))
+                self.input_sex.setCurrentText(sub[4])
+                self.input_ethnicity.setCurrentText(sub[5])
+                self.input_handedness.setCurrentText(sub[6])
+                self.input_notes.setText(sub[7])
                 
                 self.saved_data = sub
                 self.accept()
@@ -211,8 +233,8 @@ class SubjectSelectionDialog(QDialog):
         self.list_widget.clear()
         subjects = self.db_manager.get_all_subjects()
         for sub in subjects:
-            # sub is tuple: (id, name, sex, height, notes)
-            item = QListWidgetItem(f"{sub[1]} (ID: {sub[0]})")
+            # sub is tuple: (id, subject_id, name, age, sex, ethnicity, handedness, notes)
+            item = QListWidgetItem(f"{sub[2]} (ID: {sub[1]})")
             item.setData(Qt.UserRole, sub)
             self.list_widget.addItem(item)
 
