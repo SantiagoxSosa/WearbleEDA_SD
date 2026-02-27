@@ -1,5 +1,6 @@
 import sys
 import datetime
+import time
 import random
 import numpy as np
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
@@ -10,7 +11,9 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                                QSizePolicy, QSplitter, QAbstractItemView)
 from PySide6.QtCore import Qt, QTimer, QSize, QTime
 from PySide6.QtGui import QAction, QFont, QIcon, QColor, QPalette
+from collections import deque
 from backend.eda_simulate import SimulateEDAStream
+from backend.eda_process import process_eda, detect_stress
 import pyqtgraph as pg
 
 # debug
@@ -432,6 +435,22 @@ class MainWindow(QMainWindow):
 
         # create data stream
         self.eda_stream = SimulateEDAStream(duration_s=30, sampling_rate_hz=1000, gui_rate_hz=20)
+
+        # signal processing sliding window
+        self.eda_freq = 20.0
+        self.window_secs = 30
+        self.window_len = int(self.eda_freq * self.window_secs)
+        
+        # buffer for raw EDA
+        self.raw_eda_buffer = deque(maxlen=self.window_len)
+
+        # recompute signal decomposition
+        self.proc_interval = 0.5
+        self.last_process = 0.0
+
+        # hold last computed components of EDA
+        self._last_tonic = 0.0
+        self._last_phasic = 0.0
         
         # Simulation Timer
         self.timer = QTimer()
