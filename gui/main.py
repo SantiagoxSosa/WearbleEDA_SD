@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                                QSizePolicy, QSplitter, QAbstractItemView)
 from PySide6.QtCore import Qt, QTimer, QSize, QTime
 from PySide6.QtGui import QAction, QFont, QIcon, QColor, QPalette
-from backend.eda import SimulateEDAStream
+from backend.eda_simulate import SimulateEDAStream
 import pyqtgraph as pg
 
 # debug
