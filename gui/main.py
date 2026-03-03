@@ -446,7 +446,7 @@ class MainWindow(QMainWindow):
 
         # recompute signal decomposition
         self.proc_interval = 0.5
-        self.last_process = 0.0
+        self._last_proc = 0.0
 
         # hold last computed components of EDA
         self._last_tonic = 0.0
@@ -878,23 +878,41 @@ class MainWindow(QMainWindow):
             print("tick", self._tick, "recording:", self.is_recording, "connected:", self.device_connected)
 
 
-        # new update graphs
-        raw, phasic, tonic = self.eda_stream.next()
+        # acquire raw EDA data
+        raw, _, _ = self.eda_stream.next()
+        self.raw_eda_buffer.append(raw)
+
+        # push data into graph
         hr_placeholder = self.graph_main.data2[-1]
         self.graph_main.push(raw, hr_placeholder)
-        self.graph_sub.push(phasic, tonic)
 
-        # FIXME implement data logging
-        '''
-        if self.is_recording:
-            self.data_logger.write(raw, phasic, tonic)
-        '''    
+        # recompute phasic and tonic using last 30 seconds
+        now = time.time()
+        enough_data = len(self.raw_eda_buffer) >= int(self.eda_freq * 5)
+
+        if enough_data and (now - self._last_proc) >= self.proc_interval:
+            self._last_proc = now
+
+            window = np.asarray(self.raw_eda_buffer, dtype=float)
+            tonic, phasic = process_eda(window, sampling_rate_hz=self.eda_freq, method="neurokit")
+
+            if len(tonic) > 0:
+                # Use the newest sample from the decomposition
+                self._last_tonic = float(tonic[-1])
+                self._last_phasic = float(phasic[-1])
+
+            
+            onsets, peaks = detect_stress(phasic, sampling_rate_hz=self.eda_fs)
+
+        # push to bottom graph
+        self.graph_sub.push(self._last_phasic, self._last_tonic)       
+
+        # FIXME implement data logging 
 
         # Update Metrics
         if self.device_connected and self.is_recording:
             val_eda = self.graph_main.data1[-1]
             val_hr = self.graph_main.data2[-1]
-            
             self.val_eda.setText(f"{val_eda:.2f} µS")
             self.val_hr.setText(f"{int(val_hr)} BPM")
 
