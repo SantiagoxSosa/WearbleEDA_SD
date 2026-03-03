@@ -29,7 +29,7 @@ def get_available_ports():
 
 @dataclass
 class EDAData:
-    raw: int
+    raw: float
     smooth: float
 
 @dataclass
@@ -122,7 +122,7 @@ class HardwareIngestionThread(QThread):
                 if section.startswith("EDA:"):
                     vals = section.replace("EDA:", "").split(',')
                     if len(vals) == 2:
-                        packet.eda = EDAData(raw=int(vals[0]), smooth=float(vals[1]))
+                        packet.eda = EDAData(raw=float(vals[0]), smooth=float(vals[1]))
                 
                 elif section.startswith("IMU:"):
                     vals = section.replace("IMU:", "").split(',')

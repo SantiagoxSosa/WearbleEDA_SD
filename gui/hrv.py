@@ -2,13 +2,13 @@ import neurokit2 as nk
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
-from PyQt5.QtCore import QObject, pyqtSignal, pyqtSlot
+from PySide6.QtCore import QObject, Signal, Slot
 
 # Processor for HRV
 # Buffers data, and rund HRV computation when enough data is collected
 class HRVProcessor(QObject):
-    hrv_computed = pyqtSignal(dict)
-    hrv_error = pyqtSignal(str)
+    hrv_computed = Signal(dict)
+    hrv_error = Signal(str)
 
     def __init__(self, sampling_rate=256, window_second=30, parent=None):
         super().__init__(parent)
@@ -16,7 +16,17 @@ class HRVProcessor(QObject):
         self.window_size = window_second * sampling_rate # Windo second determines time of data required to compute HRV, size gives the total number of samples needed
         self.buffer = []
 
-    @pyqtSlot(list)
+    def process_packet(self, packet):
+        """Ingests a single packet from the main stream."""
+        if packet.cardiac:
+            # If hardware/sim provides HRV directly, use it
+            if packet.cardiac.hrv > 0:
+                self.hrv_computed.emit({"rmssd": packet.cardiac.hrv})
+            
+            # Also buffer IR data for potential raw calculation
+            self.receive_data([packet.cardiac.ir_value])
+
+    @Slot(list)
     def receive_data(self, data):
         self.buffer.extend(data)
 
@@ -24,7 +34,7 @@ class HRVProcessor(QObject):
             self.compute_hrv()
             self.buffer = self.buffer[-self.window_size:]
 
-    @pyqtSlot()
+    @Slot()
     # Resets the buffer
     def reset(self):
         self.buffer = []
@@ -63,7 +73,7 @@ def calculate_hrv(ppg_data, sampling_rate=256):
     processor.buffer = list(ppg_data) # Load data into buffer
 
     restult = {}
-    processor.hrv_computed.connect(lambda res: restult.update(res))
+    # processor.hrv_computed.connect(lambda res: restult.update(res)) # Signal connection logic varies by usage
     processor.compute_hrv() 
     return restult
 

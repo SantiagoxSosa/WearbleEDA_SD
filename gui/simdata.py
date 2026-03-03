@@ -85,7 +85,7 @@ class SimulationIngestionThread(QThread):
                 )
 
                 eda = EDAData(
-                    raw=int(self.sim_eda_raw[index] * 1000),
+                    raw=self.sim_eda_raw[index],
                     smooth=self.sim_eda_smooth[index]
                 )
 

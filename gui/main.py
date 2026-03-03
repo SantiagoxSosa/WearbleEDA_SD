@@ -4,6 +4,9 @@ from activity import ActivityProfileDialog
 from colorConstraints import *
 from rawdata import HardwareIngestionThread, SensorPacket, get_available_ports
 from simdata import SimulationIngestionThread
+from eda_process import EDAProcessor
+from ppg import PPGProcessor
+from hrv import HRVProcessor
 
 import sys
 import datetime
@@ -284,6 +287,35 @@ class BioSignalPlot(QWidget):
         self.curve1.setData(self.x_data, self.data1)
         self.curve2.setData(self.x_data, self.data2)
 
+    def push_data_batch(self, val1_list, val2_list):
+        """Updates the plot with a batch of new data points"""
+        n = len(val1_list)
+        if n == 0: return
+        
+        # Shift Time Window
+        dt = 1.0 / self.fs
+        
+        # Generate new time points extending from the last known time
+        last_time = self.x_data[-1]
+        new_times = last_time + np.arange(1, n + 1) * dt
+        
+        # Shift and update data arrays
+        if n >= self.buffer_size:
+            self.x_data = new_times[-self.buffer_size:]
+            self.data1 = np.array(val1_list[-self.buffer_size:])
+            self.data2 = np.array(val2_list[-self.buffer_size:])
+        else:
+            self.x_data[:-n] = self.x_data[n:]
+            self.x_data[-n:] = new_times
+            self.data1[:-n] = self.data1[n:]
+            self.data1[-n:] = val1_list
+            self.data2[:-n] = self.data2[n:]
+            self.data2[-n:] = val2_list
+        
+        # Update Curves
+        self.curve1.setData(self.x_data, self.data1)
+        self.curve2.setData(self.x_data, self.data2)
+
     def update_step(self, recording=False):
         if not recording: return
 
@@ -315,8 +347,20 @@ class MainWindow(QMainWindow):
         self.ingestion_thread = None
         self.last_hardware_error = None
         self.is_recording = False
-        self.is_paused = False
+        self.is_paused = True
         self.active_flags = [] # Stores dicts of {timestamp, line_obj, list_item}
+        
+        # --- DATA PROCESSORS ---
+        self.eda_processor = EDAProcessor(self)
+        self.ppg_processor = PPGProcessor(self)
+        self.hrv_processor = HRVProcessor(sampling_rate=20, window_second=30, parent=self)
+        self.hrv_processor.hrv_computed.connect(self.on_hrv_update)
+        
+        # Data Buffer for UI Throttling
+        self.packet_buffer = []
+        self.ui_update_timer = QTimer(self)
+        self.ui_update_timer.timeout.connect(self.update_ui_from_buffer)
+        self.ui_update_timer.start(33) # ~30 FPS
         
         # Connection Timeout Timer
         self.conn_timer = QTimer(self)
@@ -656,8 +700,17 @@ class MainWindow(QMainWindow):
         self.val_hr.setStyleSheet(f"color: {COLOR_HR}")
         v_hr.addWidget(self.val_hr)
         
+        # HRV Column
+        v_hrv = QVBoxLayout()
+        v_hrv.addWidget(QLabel("HRV (RMSSD):"))
+        self.val_hrv = QLabel("-- ms")
+        self.val_hrv.setFont(QFont(FONT_MONO, 24, QFont.Weight.Bold))
+        self.val_hrv.setStyleSheet(f"color: {COLOR_TEXT}")
+        v_hrv.addWidget(self.val_hrv)
+        
         hl.addLayout(v_eda)
         hl.addLayout(v_hr)
+        hl.addLayout(v_hrv)
         grp_met.setLayout(hl)
         layout.addWidget(grp_met)
         
@@ -692,6 +745,7 @@ class MainWindow(QMainWindow):
             
             self.device_connected = True
             self.last_hardware_error = None
+            self.is_paused = True
             
             try:
                 if dlg.debug_mode:
@@ -724,6 +778,7 @@ class MainWindow(QMainWindow):
             self.ingestion_thread = None
             
         self.device_connected = False
+        self.is_paused = True
         self.lbl_conn.setText("DISCONNECTED")
         self.lbl_conn.setStyleSheet("color: #777; border: 2px dashed #CCC; padding: 15px; border-radius: 8px;")
         
@@ -744,9 +799,6 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Device Disconnected.")
 
     def on_packet_received(self, packet: SensorPacket):
-        if self.is_paused:
-            return
-
         # If this is the first packet, confirm connection in UI
         if "CONNECTING" in self.lbl_conn.text():
             self.conn_timer.stop()
@@ -757,22 +809,39 @@ class MainWindow(QMainWindow):
             self.btn_disconnect.setEnabled(True)
             self.statusBar().showMessage("Hardware Stream Active.")
 
-        # Update Metrics
-        eda_val = packet.eda.smooth if packet.eda else 0.0
-        hr_val = packet.cardiac.bpm if packet.cardiac else 0.0
+        if self.is_paused:
+            return
+        self.packet_buffer.append(packet)
+
+    def update_ui_from_buffer(self):
+        if not self.packet_buffer:
+            return
+            
+        packets = self.packet_buffer
+        self.packet_buffer = []
+
+        # 1. Pass data to processors
+        # EDA & Decomposition
+        eda_batch, phasic_batch, tonic_batch = self.eda_processor.process_batch(packets)
         
-        self.val_eda.setText(f"{eda_val:.2f} µS")
-        self.val_hr.setText(f"{int(hr_val)} BPM")
+        # PPG / Heart Rate
+        hr_batch = self.ppg_processor.process_batch(packets)
+        
+        # HRV (Process individually as it maintains internal buffer state)
+        for packet in packets:
+            self.hrv_processor.process_packet(packet)
+            
+        # Update Metrics (Last value)
+        self.val_eda.setText(f"{eda_batch[-1]:.2f} µS")
+        self.val_hr.setText(f"{int(hr_batch[-1])} BPM")
         
         # Update Graphs
-        # Graph 1: EDA & HR
-        self.graph_main.push_data(eda_val, hr_val)
-        
-        # Graph 2: Phasic & Tonic (Approximation from raw/smooth for demo)
-        # Assuming raw is roughly phasic+tonic and smooth is tonic-ish
-        phasic_approx = (packet.eda.raw - packet.eda.smooth) if packet.eda else 0.0
-        tonic_approx = packet.eda.smooth if packet.eda else 0.0
-        self.graph_sub.push_data(phasic_approx, tonic_approx)
+        self.graph_main.push_data_batch(eda_batch, hr_batch)
+        self.graph_sub.push_data_batch(phasic_batch, tonic_batch)
+
+    def on_hrv_update(self, data):
+        if "rmssd" in data:
+            self.val_hrv.setText(f"{data['rmssd']:.1f} ms")
 
     def on_connection_timeout(self):
         if "CONNECTING" in self.lbl_conn.text():
@@ -793,8 +862,11 @@ class MainWindow(QMainWindow):
         
         # Enable Recording Controls
         self.btn_rec.setEnabled(True)
-        self.btn_sim_start.setEnabled(False) # Already running
-        self.btn_sim_pause.setEnabled(True)
+        
+        # Start in PAUSED state so user must click Start
+        self.is_paused = True
+        self.btn_sim_start.setEnabled(True)
+        self.btn_sim_pause.setEnabled(False)
         self.btn_sim_stop.setEnabled(True)
         
         # Switch View
@@ -804,11 +876,7 @@ class MainWindow(QMainWindow):
         self.graph_main.reset_data()
         self.graph_sub.reset_data()
         
-        self.statusBar().showMessage("Session Active.")
-        
-        # If using real hardware, we don't start the sim timer for data generation
-        # But we might need it if we want to mix sim/real. Assuming real replaces sim.
-        # self.on_start_sim() 
+        self.statusBar().showMessage("Session Ready. Press Start to begin data stream.")
 
     def on_load_clicked(self):
         QFileDialog.getOpenFileName(self, "Load Data", "", "CSV Files (*.csv)")
