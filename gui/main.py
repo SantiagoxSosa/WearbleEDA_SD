@@ -445,7 +445,7 @@ class MainWindow(QMainWindow):
         self.raw_eda_buffer = deque(maxlen=self.window_len)
 
         # recompute signal decomposition
-        self.proc_interval = 0.5
+        self.proc_interval = 1.0 / self.eda_freq
         self._last_proc = 0.0
 
         # hold last computed components of EDA
@@ -888,26 +888,22 @@ class MainWindow(QMainWindow):
 
         # recompute phasic and tonic using last 30 seconds
         now = time.time()
-        enough_data = len(self.raw_eda_buffer) >= int(self.eda_freq * 5)
-
-        if enough_data and (now - self._last_proc) >= self.proc_interval:
+        if len(self.raw_eda_buffer) >= int(self.eda_freq * 5) and (now - self._last_proc) >= self.proc_interval:
             self._last_proc = now
-
             window = np.asarray(self.raw_eda_buffer, dtype=float)
             tonic, phasic = process_eda(window, sampling_rate_hz=self.eda_freq, method="neurokit")
 
-            if len(tonic) > 0:
-                # Use the newest sample from the decomposition
+            if len(tonic):
+                # use newest sample from the decomposition
                 self._last_tonic = float(tonic[-1])
                 self._last_phasic = float(phasic[-1])
-
             
-            onsets, peaks = detect_stress(phasic, sampling_rate_hz=self.eda_fs)
+            # TODO: implement event annotations (peaks & onsets) on the live moving bottom plot
 
         # push to bottom graph
         self.graph_sub.push(self._last_phasic, self._last_tonic)       
 
-        # FIXME implement data logging 
+        # TODO: implement data logging
 
         # Update Metrics
         if self.device_connected and self.is_recording:
