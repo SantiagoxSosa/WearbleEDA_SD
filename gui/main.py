@@ -2,6 +2,8 @@ from database import SubjectDataDialog, SubjectSelectionDialog
 from hardwareDiagnostics import HardwareDiagnosticsDialog
 from activity import ActivityProfileDialog
 from colorConstraints import *
+from rawdata import HardwareIngestionThread, SensorPacket, get_available_ports
+from simdata import SimulationIngestionThread
 
 import sys
 import datetime
@@ -13,7 +15,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                                QGroupBox, QFrame, QStatusBar, QMenuBar, QMenu, 
                                QDialog, QListWidget, QStackedWidget, QMessageBox,
                                QGridLayout, QTabWidget, QToolButton, QFileDialog, QTextEdit,
-                               QSizePolicy, QSplitter, QAbstractItemView, QStyle)
+                               QSizePolicy, QSplitter, QAbstractItemView, QStyle, QCheckBox)
 from PySide6.QtCore import Qt, QTimer, QSize, QTime
 from PySide6.QtGui import QAction, QFont, QIcon, QColor, QPalette
 
@@ -29,22 +31,23 @@ class StyledDialog(QDialog):
 
 class ConnectDialog(StyledDialog):
     def __init__(self, parent=None):
-        super().__init__("Bluetooth Device Discovery", parent)
-        self.setFixedSize(450, 350)
+        super().__init__("Device Connection", parent)
+        self.setFixedSize(450, 400)
         
-        header = QLabel("Available Bio-Sensors")
+        header = QLabel("Available Serial Ports")
         header.setObjectName("h1")
         self.layout_main.addWidget(header)
         
         self.list_widget = QListWidget()
-        self.list_widget.addItems([
-            "EDA_DEVICE_A1", 
-            "EDA_DEVICE_B2"
-        ])
         self.layout_main.addWidget(self.list_widget)
         
+        self.chk_debug = QCheckBox("Debug Mode (Simulation)")
+        self.chk_debug.setStyleSheet(f"color: {COLOR_TEXT}; font-weight: bold; margin: 10px 0;")
+        self.chk_debug.toggled.connect(self.on_debug_toggled)
+        self.layout_main.addWidget(self.chk_debug)
+        
         btn_box = QHBoxLayout()
-        self.btn_connect = QPushButton("Connect Device")
+        self.btn_connect = QPushButton("Connect")
         self.btn_connect.clicked.connect(self.accept)
         
         btn_cancel = QPushButton("Cancel")
@@ -55,6 +58,37 @@ class ConnectDialog(StyledDialog):
         btn_box.addWidget(btn_cancel)
         btn_box.addWidget(self.btn_connect)
         self.layout_main.addLayout(btn_box)
+        
+        self.selected_port = None
+        self.debug_mode = False
+        self.populate_ports()
+
+    def on_debug_toggled(self, checked):
+        self.debug_mode = checked
+        self.list_widget.setEnabled(not checked)
+        if checked:
+            self.btn_connect.setEnabled(True)
+        else:
+            self.populate_ports()
+
+    def populate_ports(self):
+        ports = get_available_ports()
+        self.list_widget.clear()
+        if ports:
+            self.list_widget.addItems(sorted(ports))
+            self.list_widget.setCurrentRow(0)
+            self.btn_connect.setEnabled(True)
+        else:
+            self.list_widget.addItem("No ports found")
+            self.btn_connect.setEnabled(False)
+
+    def accept(self):
+        if self.debug_mode:
+            self.selected_port = "Simulation"
+            super().accept()
+        elif self.list_widget.currentItem() and self.list_widget.currentItem().text() != "No ports found":
+            self.selected_port = self.list_widget.currentItem().text()
+            super().accept()
 
 class ExitDialog(StyledDialog):
     def __init__(self, parent=None, title="Save Session?", header="End Session", text="Do you want to save the session before exiting?"):
@@ -229,9 +263,8 @@ class BioSignalPlot(QWidget):
     def remove_marker(self, line_obj):
         self.plot_widget.removeItem(line_obj)
 
-    def update_step(self, recording=False):
-        if not recording: return
-
+    def push_data(self, val1, val2):
+        """Updates the plot with new real data points"""
         # Shift Time Window
         dt = 1.0 / self.fs
         new_time = self.x_data[-1] + dt
@@ -244,8 +277,18 @@ class BioSignalPlot(QWidget):
         self.data1[:-1] = self.data1[1:]
         self.data2[:-1] = self.data2[1:]
         
+        self.data1[-1] = val1
+        self.data2[-1] = val2
+        
+        # Update Curves
+        self.curve1.setData(self.x_data, self.data1)
+        self.curve2.setData(self.x_data, self.data2)
+
+    def update_step(self, recording=False):
+        if not recording: return
+
         # Generate new values based on time
-        t = new_time
+        t = self.x_data[-1] + (1.0 / self.fs)
         
         if self.dual_axis:
             # EDA (Blue) - Slow
@@ -258,12 +301,7 @@ class BioSignalPlot(QWidget):
             # Tonic (Gold) - Slow drift
             new_val2 = 5.0 + np.sin(t/10)*2
             
-        self.data1[-1] = new_val1
-        self.data2[-1] = new_val2
-        
-        # Update Curves with new coordinate systems
-        self.curve1.setData(self.x_data, self.data1)
-        self.curve2.setData(self.x_data, self.data2)
+        self.push_data(new_val1, new_val2)
 
 # --- MAIN WINDOW ---
 class MainWindow(QMainWindow):
@@ -274,14 +312,22 @@ class MainWindow(QMainWindow):
         
         # State
         self.device_connected = False
+        self.ingestion_thread = None
+        self.last_hardware_error = None
         self.is_recording = False
+        self.is_paused = False
         self.active_flags = [] # Stores dicts of {timestamp, line_obj, list_item}
         
+        # Connection Timeout Timer
+        self.conn_timer = QTimer(self)
+        self.conn_timer.setSingleShot(True)
+        self.conn_timer.timeout.connect(self.on_connection_timeout)
+
         QApplication.instance().setStyleSheet(ResearchStyleSheet.get_stylesheet())
         self.setup_ui()
         
         # Simulation Timer
-        self.timer = QTimer()
+        self.timer = QTimer(self)
         self.timer.timeout.connect(self.game_loop)
 
     def setup_ui(self):
@@ -639,20 +685,44 @@ class MainWindow(QMainWindow):
     # --- LOGIC ---
     def on_connect_request(self):
         dlg = ConnectDialog(self)
-        if dlg.exec() == QDialog.Accepted:
+        if dlg.exec() == QDialog.Accepted and dlg.selected_port:
+            # Stop existing thread
+            if self.ingestion_thread and self.ingestion_thread.isRunning():
+                self.ingestion_thread.stop()
+            
             self.device_connected = True
+            self.last_hardware_error = None
             
-            # Update UI
-            self.lbl_conn.setText("CONNECTED")
-            self.lbl_conn.setStyleSheet("color: green; border: 2px solid green; font-weight: bold; border-radius: 8px; background: #E8F5E9;")
-            
-            self.btn_start.setEnabled(True)
-            self.btn_start.setText("Start Live Session")
-            self.btn_disconnect.setEnabled(True)
-            
-            self.statusBar().showMessage("Device Connected.")
+            try:
+                if dlg.debug_mode:
+                    self.ingestion_thread = SimulationIngestionThread()
+                    # Immediate UI update for simulation
+                    self.lbl_conn.setText("CONNECTED (SIM)")
+                    self.lbl_conn.setStyleSheet("color: green; border: 2px solid green; font-weight: bold; border-radius: 8px; background: #E8F5E9;")
+                    self.btn_start.setEnabled(True)
+                    self.btn_start.setText("Start Live Session")
+                    self.btn_disconnect.setEnabled(True)
+                    self.statusBar().showMessage("Simulation Stream Active.")
+                else:
+                    self.ingestion_thread = HardwareIngestionThread(port=dlg.selected_port)
+                    self.lbl_conn.setText("CONNECTING...")
+                    self.lbl_conn.setStyleSheet("color: orange; border: 2px dashed orange; padding: 15px; border-radius: 8px;")
+                    self.statusBar().showMessage("Attempting connection to hardware...")
+                    # Start Timeout Timer (5 seconds)
+                    self.conn_timer.start(5000)
+                
+                self.ingestion_thread.packet_ready.connect(self.on_packet_received)
+                self.ingestion_thread.error_occurred.connect(self.on_hardware_error)
+                self.ingestion_thread.start()
+            except Exception as e:
+                self.on_hardware_error(f"Failed to start ingestion: {e}")
 
     def on_disconnect(self):
+        self.conn_timer.stop()
+        if self.ingestion_thread:
+            self.ingestion_thread.stop()
+            self.ingestion_thread = None
+            
         self.device_connected = False
         self.lbl_conn.setText("DISCONNECTED")
         self.lbl_conn.setStyleSheet("color: #777; border: 2px dashed #CCC; padding: 15px; border-radius: 8px;")
@@ -673,12 +743,57 @@ class MainWindow(QMainWindow):
         self.btn_sim_stop.setEnabled(False)
         self.statusBar().showMessage("Device Disconnected.")
 
+    def on_packet_received(self, packet: SensorPacket):
+        if self.is_paused:
+            return
+
+        # If this is the first packet, confirm connection in UI
+        if "CONNECTING" in self.lbl_conn.text():
+            self.conn_timer.stop()
+            self.lbl_conn.setText("CONNECTED")
+            self.lbl_conn.setStyleSheet("color: green; border: 2px solid green; font-weight: bold; border-radius: 8px; background: #E8F5E9;")
+            self.btn_start.setEnabled(True)
+            self.btn_start.setText("Start Live Session")
+            self.btn_disconnect.setEnabled(True)
+            self.statusBar().showMessage("Hardware Stream Active.")
+
+        # Update Metrics
+        eda_val = packet.eda.smooth if packet.eda else 0.0
+        hr_val = packet.cardiac.bpm if packet.cardiac else 0.0
+        
+        self.val_eda.setText(f"{eda_val:.2f} µS")
+        self.val_hr.setText(f"{int(hr_val)} BPM")
+        
+        # Update Graphs
+        # Graph 1: EDA & HR
+        self.graph_main.push_data(eda_val, hr_val)
+        
+        # Graph 2: Phasic & Tonic (Approximation from raw/smooth for demo)
+        # Assuming raw is roughly phasic+tonic and smooth is tonic-ish
+        phasic_approx = (packet.eda.raw - packet.eda.smooth) if packet.eda else 0.0
+        tonic_approx = packet.eda.smooth if packet.eda else 0.0
+        self.graph_sub.push_data(phasic_approx, tonic_approx)
+
+    def on_connection_timeout(self):
+        if "CONNECTING" in self.lbl_conn.text():
+            self.on_hardware_error("Connection timed out: No data received within 5 seconds.")
+
+    def on_hardware_error(self, msg: str):
+        self.last_hardware_error = msg
+        self.on_disconnect() # Clean up thread and UI state
+        
+        # Override status to show error
+        self.lbl_conn.setText("CONNECTION ERROR")
+        self.lbl_conn.setStyleSheet(f"color: {COLOR_RECORD}; border: 2px solid {COLOR_RECORD}; font-weight: bold; border-radius: 8px; background: #FDEDEC;")
+        self.statusBar().showMessage(f"Hardware Error: {msg}")
+        QMessageBox.critical(self, "Hardware Error", f"Connection lost: {msg}")
+
     def on_start_session(self):
         if not self.device_connected: return
         
         # Enable Recording Controls
         self.btn_rec.setEnabled(True)
-        self.btn_sim_start.setEnabled(True)
+        self.btn_sim_start.setEnabled(False) # Already running
         self.btn_sim_pause.setEnabled(True)
         self.btn_sim_stop.setEnabled(True)
         
@@ -689,9 +804,11 @@ class MainWindow(QMainWindow):
         self.graph_main.reset_data()
         self.graph_sub.reset_data()
         
-        self.statusBar().showMessage("Session Active. Press REC to start data stream.")
-        self.on_start_sim()
-        self.statusBar().showMessage("Session Active. Data stream started.")
+        self.statusBar().showMessage("Session Active.")
+        
+        # If using real hardware, we don't start the sim timer for data generation
+        # But we might need it if we want to mix sim/real. Assuming real replaces sim.
+        # self.on_start_sim() 
 
     def on_load_clicked(self):
         QFileDialog.getOpenFileName(self, "Load Data", "", "CSV Files (*.csv)")
@@ -702,7 +819,7 @@ class MainWindow(QMainWindow):
             self.lbl_rec_hint.setText("RECORDING")
             self.lbl_rec_hint.setStyleSheet(f"color: {COLOR_RECORD}; font-weight: bold;")
         else:
-            self.lbl_rec_hint.setText("Paused")
+            self.lbl_rec_hint.setText("Ready")
             self.lbl_rec_hint.setStyleSheet("color: black;")
         
         print("Recording State Toggled")
@@ -800,9 +917,10 @@ class MainWindow(QMainWindow):
             self.list_flags.takeItem(row)
 
     def game_loop(self):
-        # Update Graphs
-        self.graph_main.update_step(True)
-        self.graph_sub.update_step(True)
+        # Only used for simulation mode now
+        if not self.device_connected:
+            self.graph_main.update_step(True)
+            self.graph_sub.update_step(True)
         
         # Update Metrics
         val_eda = self.graph_main.data1[-1]
@@ -812,33 +930,44 @@ class MainWindow(QMainWindow):
         self.val_hr.setText(f"{int(val_hr)} BPM")
 
     def on_start_sim(self):
-        self.timer.start(50)
+        self.is_paused = False
+        self.btn_sim_start.setEnabled(False)
+        self.btn_sim_pause.setEnabled(True)
+        self.statusBar().showMessage("Data Stream Resumed.")
 
     def on_pause_sim(self):
-        self.timer.stop()
+        self.is_paused = True
+        self.btn_sim_start.setEnabled(True)
+        self.btn_sim_pause.setEnabled(False)
+        self.statusBar().showMessage("Data Stream Paused.")
 
     def on_stop_sim(self):
-        was_running = self.timer.isActive()
-        self.timer.stop()
-        
-        dlg = ExitDialog(self, "Stop Session?", "Stop Recording", "Do you want to save the recorded data?")
+        dlg = ExitDialog(self, "End Session?", "End Session", "Do you want to save the session data?")
         if dlg.exec() == QDialog.Accepted:
             if dlg.action == 'save':
-                print("Saving Session Data...")
-            elif dlg.action == 'discard':
-                print("Session Stopped")
-        elif was_running:
-            self.timer.start()
+                print("Saving Session Data...") # Placeholder
+            self.on_disconnect()
+            self.center_stack.setCurrentIndex(0) # Return to dashboard
 
     def closeEvent(self, event):
         dlg = ExitDialog(self)
         if dlg.exec() == QDialog.Accepted:
             if dlg.action == 'save':
                 print("Saving...")
-                event.accept()
             elif dlg.action == 'discard':
                 print("Discarding...")
-                event.accept()
+            
+            # Stop Timers
+            if self.timer.isActive():
+                self.timer.stop()
+            if self.conn_timer.isActive():
+                self.conn_timer.stop()
+            
+            # Stop Thread
+            if self.ingestion_thread:
+                # stop() handles the wait() call internally
+                self.ingestion_thread.stop()
+            event.accept()
         else:
             event.ignore()
     def open_subject_data_dialog(self):
@@ -873,7 +1002,7 @@ class MainWindow(QMainWindow):
                 self.statusBar().showMessage(f"Imported subject: {sub[2]}")
 
     def open_diagnostics(self):
-        dlg = HardwareDiagnosticsDialog(self)
+        dlg = HardwareDiagnosticsDialog(self, active_error=self.last_hardware_error)
         dlg.exec()
 
     def open_activity_profile(self):

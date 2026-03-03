@@ -18,8 +18,9 @@ ERROR_CODES = {
 SUCCESS_GREEN = "#5cb85c"
 
 class HardwareDiagnosticsDialog(QDialog):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, active_error=None):
         super().__init__(parent)
+        self.active_error = active_error
         self.setWindowTitle("Hardware Diagnostics")
         self.setFixedSize(500, 380)
         
@@ -54,6 +55,12 @@ class HardwareDiagnosticsDialog(QDialog):
             ("BMI270 Gyroscope", 0xE1)       # FAILURE (Mocked from gyrscope_code.c)
         ]
         
+        # Inject Connection Status based on active_error
+        if self.active_error:
+            sensors.insert(0, ("Serial Connection", 0xFF))
+        else:
+            sensors.insert(0, ("Serial Connection", 0x00))
+
         for name, code in sensors:
             row = QHBoxLayout()
             
@@ -63,6 +70,10 @@ class HardwareDiagnosticsDialog(QDialog):
                 icon = self.style().standardIcon(QStyle.SP_DialogApplyButton)
                 status_text = "Online"
                 status_color = SUCCESS_GREEN
+            elif code == 0xFF:
+                icon = self.style().standardIcon(QStyle.SP_MessageBoxCritical)
+                status_text = self.active_error
+                status_color = COLOR_RECORD
             else:
                 icon = self.style().standardIcon(QStyle.SP_DialogCancelButton)
                 status_text = ERROR_CODES.get(code, f"Unknown Error (0x{code:02X})")

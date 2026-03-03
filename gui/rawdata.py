@@ -1,11 +1,29 @@
+# Required pip installs:
+# pip install pyserial
+# pip install PySide6
+
 import sys
 import time
 import serial
+import serial.tools.list_ports
 from dataclasses import dataclass
 from typing import Optional
 
 from PySide6.QtCore import QThread, Signal, QTimer
 from PySide6.QtWidgets import QApplication
+
+# Check for correct serial library (pyserial vs serial)
+if not hasattr(serial, 'Serial'):
+    print("\nCRITICAL ERROR: Incorrect 'serial' library detected.")
+    print("Please run: pip uninstall serial && pip install pyserial\n")
+    sys.exit(1)
+
+def get_available_ports():
+    try:
+        return [port.device for port in serial.tools.list_ports.comports()]
+    except Exception as e:
+        print(f"Error listing ports: {e}")
+        return []
 
 # --- DATA STRUCTURES ---
 
@@ -48,15 +66,14 @@ class HardwareIngestionThread(QThread):
         super().__init__(parent)
         self.port = port
         self.baudrate = baudrate
-        self._running = False
+        self._running = True
         self.serial_conn = None
 
     def run(self):
-        self._running = True
         
         try:
             # Open the serial port with a timeout so the thread can exit gracefully
-            self.serial_conn = serial.Serial(self.port, self.baudrate, timeout=1.0)
+            self.serial_conn = serial.Serial(self.port, self.baudrate, timeout=0.1)
             print(f"Connected to {self.port} at {self.baudrate} baud.")
         except serial.SerialException as e:
             self.error_occurred.emit(f"Failed to connect to hardware: {e}")
@@ -144,6 +161,7 @@ if __name__ == "__main__":
     ingestion_node = HardwareIngestionThread(port="COM3", baudrate=115200)
 
     packet_count = [0]
+    print(f"Using Standalone Testing Mode")
 
     def on_packet_received(packet: SensorPacket):
         packet_count[0] += 1
