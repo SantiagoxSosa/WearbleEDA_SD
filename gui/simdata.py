@@ -45,7 +45,7 @@ class SimulationIngestionThread(QThread):
         eda_raw = nk.eda_simulate(duration=self.sim_duration,
                                   sampling_rate=self.sampling_rate,
                                   scr_number=8,
-                                  drift=0.05,
+                                  drift=0.01,
                                   noise=0.005)
         eda_signals, _ = nk.eda_process(eda_raw, sampling_rate=self.sampling_rate)
         self.sim_eda_raw = eda_raw
@@ -113,6 +113,9 @@ class SimulationIngestionThread(QThread):
     def stop(self):
         self._running = False
         self.wait()
+
+    def set_sampling_rate(self, rate):
+        self.sampling_rate = rate
 
 #Test output (Written by Claude AI)
 if __name__ == "__main__":

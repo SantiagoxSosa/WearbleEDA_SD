@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                                QHBoxLayout, QLabel, QPushButton, QLineEdit, 
                                QGroupBox, QFrame, QStatusBar, QMenuBar, QMenu, 
                                QDialog, QListWidget, QStackedWidget, QMessageBox,
-                               QGridLayout, QTabWidget, QToolButton, QFileDialog, QTextEdit,
+                               QGridLayout, QTabWidget, QToolButton, QFileDialog, QTextEdit, QComboBox, QFormLayout, QDoubleSpinBox,
                                QSizePolicy, QSplitter, QAbstractItemView, QStyle, QCheckBox)
 from PySide6.QtCore import Qt, QTimer, QSize, QTime
 from PySide6.QtGui import QAction, QFont, QIcon, QColor, QPalette
@@ -130,6 +130,79 @@ class ExitDialog(StyledDialog):
         self.action = 'discard'
         self.accept()
 
+class HardwareConfigDialog(StyledDialog):
+    def __init__(self, current_rate, eda_win, ppg_win, hrv_win, parent=None):
+        super().__init__("Hardware Configuration", parent)
+        self.setFixedSize(400, 350)
+        
+        # Header
+        header = QLabel("Acquisition Settings")
+        header.setObjectName("h1")
+        self.layout_main.addWidget(header)
+        
+        # Settings Group
+        grp = QGroupBox("Global Parameters")
+        form = QFormLayout()
+        
+        self.combo_rate = QComboBox()
+        rates = [20, 50, 64, 100, 128, 250, 256, 500, 1000]
+        for r in rates:
+            self.combo_rate.addItem(f"{r} Hz", r)
+            
+        idx = self.combo_rate.findData(current_rate)
+        if idx >= 0:
+            self.combo_rate.setCurrentIndex(idx)
+            
+        # Window Settings
+        self.combo_eda = QComboBox()
+        self.combo_eda.setToolTip("Time window for Phasic/Tonic decomposition")
+        for w in [10, 30, 60, 120, 300]:
+            self.combo_eda.addItem(f"{w} s", w)
+        idx = self.combo_eda.findData(eda_win)
+        if idx >= 0: self.combo_eda.setCurrentIndex(idx)
+
+        self.combo_ppg = QComboBox()
+        self.combo_ppg.setToolTip("Time window for Heart Rate calculation")
+        for w in [5, 10, 20, 30, 60]:
+            self.combo_ppg.addItem(f"{w} s", w)
+        idx = self.combo_ppg.findData(ppg_win)
+        if idx >= 0: self.combo_ppg.setCurrentIndex(idx)
+
+        self.combo_hrv = QComboBox()
+        self.combo_hrv.setToolTip("Time window for HRV (RMSSD) calculation")
+        for w in [30, 60, 120, 300]:
+            self.combo_hrv.addItem(f"{w} s", w)
+        idx = self.combo_hrv.findData(hrv_win)
+        if idx >= 0: self.combo_hrv.setCurrentIndex(idx)
+            
+        form.addRow("Sampling Rate:", self.combo_rate)
+        form.addRow("EDA Window:", self.combo_eda)
+        form.addRow("PPG Window:", self.combo_ppg)
+        form.addRow("HRV Window:", self.combo_hrv)
+        grp.setLayout(form)
+        self.layout_main.addWidget(grp)
+        
+        self.layout_main.addStretch()
+        
+        btn_box = QHBoxLayout()
+        self.btn_cancel = QPushButton("Cancel")
+        self.btn_cancel.setObjectName("secondary")
+        self.btn_cancel.clicked.connect(self.reject)
+        
+        self.btn_apply = QPushButton("Apply")
+        self.btn_apply.clicked.connect(self.accept)
+        
+        btn_box.addStretch()
+        btn_box.addWidget(self.btn_cancel)
+        btn_box.addWidget(self.btn_apply)
+        self.layout_main.addLayout(btn_box)
+        
+    def get_selected_rate(self):
+        return self.combo_rate.currentData()
+
+    def get_windows(self):
+        return self.combo_eda.currentData(), self.combo_ppg.currentData(), self.combo_hrv.currentData()
+
 class RibbonButton(QToolButton):
     def __init__(self, text, icon_std_key, parent=None):
         super().__init__(parent)
@@ -184,7 +257,7 @@ class BioSignalPlot(QWidget):
         self.buffer_size = 300
         self.fs = 20.0 # Hz
         # X-Data will hold actual timestamps (simulated)
-        self.x_data = np.linspace(-self.buffer_size/self.fs, 0, self.buffer_size)
+        self.x_data = np.array([])
         
         self.dual_axis = right_label is not None
         
@@ -200,7 +273,7 @@ class BioSignalPlot(QWidget):
             c1 = COLOR_PRIMARY
             name1 = left_label
 
-        self.data1 = np.zeros(self.buffer_size)
+        self.data1 = np.array([])
         self.curve1 = self.plot_widget.plot(self.x_data, self.data1, pen=pg.mkPen(c1, width=2), name=name1)
 
         # --- RIGHT AXIS (Secondary) or SAME AXIS ---
@@ -215,7 +288,7 @@ class BioSignalPlot(QWidget):
             self.vb2.setXLink(self.plot_item)
             self.plot_item.getAxis('right').setLabel(right_label, units=right_unit)
             
-            self.data2 = np.zeros(self.buffer_size)
+            self.data2 = np.array([])
             # HR is Red
             c2 = COLOR_HR if "Heart" in right_label else COLOR_RECORD
             
@@ -228,7 +301,7 @@ class BioSignalPlot(QWidget):
             self.plot_item.vb.sigResized.connect(self.update_views)
         else:
             # Same axis (Bottom Graph: Phasic vs Tonic)
-            self.data2 = np.zeros(self.buffer_size)
+            self.data2 = np.array([])
             # Tonic is Gold
             c2 = COLOR_TONIC
             self.curve2 = self.plot_widget.plot(self.x_data, self.data2, pen=pg.mkPen(c2, width=2), name="Tonic Level")
@@ -239,9 +312,9 @@ class BioSignalPlot(QWidget):
             self.vb2.linkedViewChanged(self.plot_item.vb, self.vb2.XAxis)
 
     def reset_data(self):
-        self.x_data = np.linspace(-self.buffer_size/self.fs, 0, self.buffer_size)
-        self.data1 = np.zeros(self.buffer_size)
-        self.data2 = np.zeros(self.buffer_size)
+        self.x_data = np.array([])
+        self.data1 = np.array([])
+        self.data2 = np.array([])
         self.curve1.setData(self.x_data, self.data1)
         self.curve2.setData(self.x_data, self.data2)
         # Clear lines
@@ -251,7 +324,10 @@ class BioSignalPlot(QWidget):
 
     def add_marker(self, text, color_hex):
         """Adds a marker at the current latest timestamp (right side)"""
-        current_time = self.x_data[-1]
+        if len(self.x_data) > 0:
+            current_time = self.x_data[-1]
+        else:
+            current_time = 0.0
         c = QColor(color_hex)
         
         # InfiniteLine at current_time. 
@@ -270,18 +346,20 @@ class BioSignalPlot(QWidget):
         """Updates the plot with new real data points"""
         # Shift Time Window
         dt = 1.0 / self.fs
-        new_time = self.x_data[-1] + dt
         
-        # Shift X Data
-        self.x_data[:-1] = self.x_data[1:]
-        self.x_data[-1] = new_time
+        if len(self.x_data) > 0:
+            new_time = self.x_data[-1] + dt
+        else:
+            new_time = 0.0
         
-        # Shift Y Data
-        self.data1[:-1] = self.data1[1:]
-        self.data2[:-1] = self.data2[1:]
+        self.x_data = np.append(self.x_data, new_time)
+        self.data1 = np.append(self.data1, val1)
+        self.data2 = np.append(self.data2, val2)
         
-        self.data1[-1] = val1
-        self.data2[-1] = val2
+        if len(self.x_data) > self.buffer_size:
+            self.x_data = self.x_data[-self.buffer_size:]
+            self.data1 = self.data1[-self.buffer_size:]
+            self.data2 = self.data2[-self.buffer_size:]
         
         # Update Curves
         self.curve1.setData(self.x_data, self.data1)
@@ -296,44 +374,27 @@ class BioSignalPlot(QWidget):
         dt = 1.0 / self.fs
         
         # Generate new time points extending from the last known time
-        last_time = self.x_data[-1]
+        if len(self.x_data) > 0:
+            last_time = self.x_data[-1]
+        else:
+            last_time = -dt # So first point starts at 0
+            
         new_times = last_time + np.arange(1, n + 1) * dt
         
-        # Shift and update data arrays
-        if n >= self.buffer_size:
-            self.x_data = new_times[-self.buffer_size:]
-            self.data1 = np.array(val1_list[-self.buffer_size:])
-            self.data2 = np.array(val2_list[-self.buffer_size:])
-        else:
-            self.x_data[:-n] = self.x_data[n:]
-            self.x_data[-n:] = new_times
-            self.data1[:-n] = self.data1[n:]
-            self.data1[-n:] = val1_list
-            self.data2[:-n] = self.data2[n:]
-            self.data2[-n:] = val2_list
+        # Append
+        self.x_data = np.concatenate([self.x_data, new_times])
+        self.data1 = np.concatenate([self.data1, val1_list])
+        self.data2 = np.concatenate([self.data2, val2_list])
+        
+        # Slice if needed
+        if len(self.x_data) > self.buffer_size:
+            self.x_data = self.x_data[-self.buffer_size:]
+            self.data1 = self.data1[-self.buffer_size:]
+            self.data2 = self.data2[-self.buffer_size:]
         
         # Update Curves
         self.curve1.setData(self.x_data, self.data1)
         self.curve2.setData(self.x_data, self.data2)
-
-    def update_step(self, recording=False):
-        if not recording: return
-
-        # Generate new values based on time
-        t = self.x_data[-1] + (1.0 / self.fs)
-        
-        if self.dual_axis:
-            # EDA (Blue) - Slow
-            new_val1 = 5.0 + np.sin(t/5) + np.random.normal(0, 0.05)
-            # HR (Red) - Faster, Higher magnitude
-            new_val2 = 75.0 + np.sin(t/2)*10 + np.random.normal(0, 1.0)
-        else:
-            # Phasic (Blue) - Zero centered, spiky
-            new_val1 = np.random.normal(0, 0.2) * (1.0 if np.random.random() > 0.8 else 0.0)
-            # Tonic (Gold) - Slow drift
-            new_val2 = 5.0 + np.sin(t/10)*2
-            
-        self.push_data(new_val1, new_val2)
 
 # --- MAIN WINDOW ---
 class MainWindow(QMainWindow):
@@ -349,11 +410,12 @@ class MainWindow(QMainWindow):
         self.is_recording = False
         self.is_paused = True
         self.active_flags = [] # Stores dicts of {timestamp, line_obj, list_item}
+        self.sampling_rate = 20 # Default
         
         # --- DATA PROCESSORS ---
-        self.eda_processor = EDAProcessor(self)
-        self.ppg_processor = PPGProcessor(self)
-        self.hrv_processor = HRVProcessor(sampling_rate=20, window_second=30, parent=self)
+        self.eda_processor = EDAProcessor(self, sampling_rate=self.sampling_rate)
+        self.ppg_processor = PPGProcessor(self, sampling_rate=self.sampling_rate)
+        self.hrv_processor = HRVProcessor(sampling_rate=self.sampling_rate, window_second=30, parent=self)
         self.hrv_processor.hrv_computed.connect(self.on_hrv_update)
         
         # Data Buffer for UI Throttling
@@ -369,10 +431,6 @@ class MainWindow(QMainWindow):
 
         QApplication.instance().setStyleSheet(ResearchStyleSheet.get_stylesheet())
         self.setup_ui()
-        
-        # Simulation Timer
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.game_loop)
 
     def setup_ui(self):
         self.create_menu_bar()
@@ -447,7 +505,7 @@ class MainWindow(QMainWindow):
         # GROUP 2: RECORDING
         # Using built-in icons to approximate Gear/Waveform
         acq_page = create_page([
-            ("Hardware\nConfig", QStyle.SP_FileDialogDetailedView, None), # Gear-ish
+            ("Hardware\nConfig", QStyle.SP_FileDialogDetailedView, self.open_hardware_config), # Gear-ish
             ("Noise\nThresholds", QStyle.SP_DriveNetIcon, None), # Waveform-ish
             ("Activity\nProfile", QStyle.SP_MediaSeekForward, self.open_activity_profile) # Motion-ish
         ])
@@ -457,7 +515,8 @@ class MainWindow(QMainWindow):
         ana_page = create_page([
             ("Run\ncvxEDA", QStyle.SP_MediaPlay, lambda: QMessageBox.information(self, "Info", "Optimization Started")),
             ("Filter\nConfig", QStyle.SP_FileDialogListView, None),
-            ("HRV\nDashboard", QStyle.SP_FileDialogContentsView, lambda: QMessageBox.information(self, "HRV", "Opening HRV Dashboard..."))
+            ("HRV\nDashboard", QStyle.SP_FileDialogContentsView, lambda: QMessageBox.information(self, "HRV", "Opening HRV Dashboard...")),
+            ("NK2\nVerify", QStyle.SP_ComputerIcon, lambda: self.eda_processor.create_debug_plot())
         ])
         self.ribbon_tabs.addTab(ana_page, "Analysis")
         
@@ -499,15 +558,25 @@ class MainWindow(QMainWindow):
         self.txt_sub_age.setReadOnly(True)
         gl.addWidget(self.txt_sub_age, 3, 1)
 
-        gl.addWidget(QLabel("Notes:"), 4, 0)
+        gl.addWidget(QLabel("Ethnicity:"), 4, 0)
+        self.txt_sub_ethnicity = QLineEdit()
+        self.txt_sub_ethnicity.setReadOnly(True)
+        gl.addWidget(self.txt_sub_ethnicity, 4, 1)
+
+        gl.addWidget(QLabel("Handedness:"), 5, 0)
+        self.txt_sub_handedness = QLineEdit()
+        self.txt_sub_handedness.setReadOnly(True)
+        gl.addWidget(self.txt_sub_handedness, 5, 1)
+
+        gl.addWidget(QLabel("Notes:"), 6, 0)
         self.txt_sub_notes = QTextEdit()
         self.txt_sub_notes.setReadOnly(True)
         self.txt_sub_notes.setMaximumHeight(50)
-        gl.addWidget(self.txt_sub_notes, 4, 1)
+        gl.addWidget(self.txt_sub_notes, 6, 1)
 
-        gl.addWidget(QLabel("Session:"), 5, 0)
+        gl.addWidget(QLabel("Session:"), 7, 0)
         self.txt_session = QLineEdit("001")
-        gl.addWidget(self.txt_session, 5, 1)
+        gl.addWidget(self.txt_session, 7, 1)
         
         grp_sub.setLayout(gl)
         layout.addWidget(grp_sub)
@@ -749,7 +818,7 @@ class MainWindow(QMainWindow):
             
             try:
                 if dlg.debug_mode:
-                    self.ingestion_thread = SimulationIngestionThread()
+                    self.ingestion_thread = SimulationIngestionThread(sampling_rate=self.sampling_rate)
                     # Immediate UI update for simulation
                     self.lbl_conn.setText("CONNECTED (SIM)")
                     self.lbl_conn.setStyleSheet("color: green; border: 2px solid green; font-weight: bold; border-radius: 8px; background: #E8F5E9;")
@@ -786,9 +855,6 @@ class MainWindow(QMainWindow):
         self.btn_start.setText("Start New Session")
         self.btn_disconnect.setEnabled(False)
         
-        if self.timer.isActive():
-            self.timer.stop()
-            
         # Disable Recording Controls
         if self.btn_rec.isChecked():
             self.btn_rec.setChecked(False)
@@ -906,7 +972,10 @@ class MainWindow(QMainWindow):
         
         # Add to List
         # Get timestamp from graph
-        ts = self.graph_main.x_data[-1]
+        if len(self.graph_main.x_data) > 0:
+            ts = self.graph_main.x_data[-1]
+        else:
+            ts = 0.0
         ts_fmt = f"{ts:.2f}s"
         
         item = pg.QtWidgets.QListWidgetItem(f"[{ts_fmt}] {label}")
@@ -984,19 +1053,6 @@ class MainWindow(QMainWindow):
             # Remove list item
             self.list_flags.takeItem(row)
 
-    def game_loop(self):
-        # Only used for simulation mode now
-        if not self.device_connected:
-            self.graph_main.update_step(True)
-            self.graph_sub.update_step(True)
-        
-        # Update Metrics
-        val_eda = self.graph_main.data1[-1]
-        val_hr = self.graph_main.data2[-1]
-        
-        self.val_eda.setText(f"{val_eda:.2f} µS")
-        self.val_hr.setText(f"{int(val_hr)} BPM")
-
     def on_start_sim(self):
         self.is_paused = False
         self.btn_sim_start.setEnabled(False)
@@ -1026,8 +1082,6 @@ class MainWindow(QMainWindow):
                 print("Discarding...")
             
             # Stop Timers
-            if self.timer.isActive():
-                self.timer.stop()
             if self.conn_timer.isActive():
                 self.conn_timer.stop()
             
@@ -1052,6 +1106,8 @@ class MainWindow(QMainWindow):
                     self.txt_sub_name.setText(name)
                     self.txt_sub_sex.setText(sex)
                     self.txt_sub_age.setText(str(age))
+                    self.txt_sub_ethnicity.setText(ethnicity)
+                    self.txt_sub_handedness.setText(handedness)
                     self.txt_sub_notes.setText(notes)
 
             self.statusBar().showMessage("Subject metadata updated successfully.", 5000)
@@ -1066,6 +1122,8 @@ class MainWindow(QMainWindow):
                 self.txt_sub_name.setText(sub[2])
                 self.txt_sub_sex.setText(sub[4])
                 self.txt_sub_age.setText(str(sub[3]))
+                self.txt_sub_ethnicity.setText(sub[5])
+                self.txt_sub_handedness.setText(sub[6])
                 self.txt_sub_notes.setText(sub[7])
                 self.statusBar().showMessage(f"Imported subject: {sub[2]}")
 
@@ -1076,6 +1134,31 @@ class MainWindow(QMainWindow):
     def open_activity_profile(self):
         dlg = ActivityProfileDialog(self)
         dlg.exec()
+        
+    def open_hardware_config(self):
+        # Get current values
+        eda_win = self.eda_processor.window_seconds
+        ppg_win = self.ppg_processor.window_seconds
+        hrv_win = self.hrv_processor.window_second
+
+        dlg = HardwareConfigDialog(self.sampling_rate, eda_win, ppg_win, hrv_win, self)
+        if dlg.exec() == QDialog.Accepted:
+            new_rate = dlg.get_selected_rate()
+            new_eda, new_ppg, new_hrv = dlg.get_windows()
+            
+            if new_rate != self.sampling_rate:
+                self.sampling_rate = new_rate
+                self.eda_processor.set_sampling_rate(new_rate)
+                self.ppg_processor.set_sampling_rate(new_rate)
+                self.hrv_processor.set_sampling_rate(new_rate)
+                self.graph_main.fs = float(new_rate)
+                self.graph_sub.fs = float(new_rate)
+            
+            self.eda_processor.set_window_seconds(new_eda)
+            self.ppg_processor.set_window_seconds(new_ppg)
+            self.hrv_processor.set_window_seconds(new_hrv)
+            
+            self.statusBar().showMessage(f"Acquisition settings updated: {new_rate}Hz")
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

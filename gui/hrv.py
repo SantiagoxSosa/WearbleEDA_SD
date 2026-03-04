@@ -13,17 +13,14 @@ class HRVProcessor(QObject):
     def __init__(self, sampling_rate=256, window_second=30, parent=None):
         super().__init__(parent)
         self.sampling_rate = sampling_rate # Data points per second
+        self.window_second = window_second
         self.window_size = window_second * sampling_rate # Windo second determines time of data required to compute HRV, size gives the total number of samples needed
         self.buffer = []
 
     def process_packet(self, packet):
         """Ingests a single packet from the main stream."""
         if packet.cardiac:
-            # If hardware/sim provides HRV directly, use it
-            if packet.cardiac.hrv > 0:
-                self.hrv_computed.emit({"rmssd": packet.cardiac.hrv})
-            
-            # Also buffer IR data for potential raw calculation
+            # Buffer IR data for raw calculation
             self.receive_data([packet.cardiac.ir_value])
 
     @Slot(list)
@@ -65,6 +62,16 @@ class HRVProcessor(QObject):
         except Exception as e:
             self.hrv_error.emit(f"Error processing data: {str(e)}")
             return
+
+    def set_sampling_rate(self, rate):
+        self.sampling_rate = rate
+        self.window_size = int(self.window_second * rate)
+        self.buffer = []
+
+    def set_window_seconds(self, seconds):
+        self.window_second = seconds
+        self.window_size = int(seconds * self.sampling_rate)
+        self.buffer = []
 
 # Function that calculates HRV and retunrs the result
 def calculate_hrv(ppg_data, sampling_rate=256):
