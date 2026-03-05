@@ -417,6 +417,7 @@ class MainWindow(QMainWindow):
         self.ppg_processor = PPGProcessor(self, sampling_rate=self.sampling_rate)
         self.hrv_processor = HRVProcessor(sampling_rate=self.sampling_rate, window_second=30, parent=self)
         self.hrv_processor.hrv_computed.connect(self.on_hrv_update)
+        self._hrv_windows = []
         
         # Data Buffer for UI Throttling
         self.packet_buffer = []
@@ -428,6 +429,12 @@ class MainWindow(QMainWindow):
         self.conn_timer = QTimer(self)
         self.conn_timer.setSingleShot(True)
         self.conn_timer.timeout.connect(self.on_connection_timeout)
+
+        # Time elapsed Timer
+        self.session_start_time = None
+        self.timer_elapsed = QTimer(self)
+        self.timer_elapsed.timeout.connect(self.update_elapsed_time)
+
 
         QApplication.instance().setStyleSheet(ResearchStyleSheet.get_stylesheet())
         self.setup_ui()
@@ -510,6 +517,7 @@ class MainWindow(QMainWindow):
             ("Activity\nProfile", QStyle.SP_MediaSeekForward, self.open_activity_profile) # Motion-ish
         ])
         self.ribbon_tabs.addTab(acq_page, "Recording")
+
         
         # GROUP 3: ANALYSIS
         ana_page = create_page([
@@ -519,8 +527,18 @@ class MainWindow(QMainWindow):
             ("NK2\nVerify", QStyle.SP_ComputerIcon, lambda: self.eda_processor.create_debug_plot())
         ])
         self.ribbon_tabs.addTab(ana_page, "Analysis")
+
+        # GROUP 4: HRV
+        # Clicking on the buttons opens a separate window with an interactive graph
+        hrv_page = create_page([
+            #("Run\nRMSSD", QStyle.SP_FileDialogDetailedView, self._hrv_run_rmssd),
+            ("Display\nR-R intervals", QStyle.SP_FileDialogDetailedView, self._hrv_open_rri),
+            ("Display\nPoincare Plot", QStyle.SP_FileDialogDetailedView,  self._hrv_open_poincare),
+            ("Display\nPSD", QStyle.SP_FileDialogDetailedView, self._hrv_open_psd),
+        ])
+        self.ribbon_tabs.addTab(hrv_page, "HRV") 
         
-        # GROUP 4: EXPORT
+        # GROUP 5: EXPORT
         exp_page = create_page([
             ("Export\nCSV", QStyle.SP_FileIcon, lambda: print("Exporting CSV...")),
             ("Save Graph\nImage", QStyle.SP_DialogSaveButton, lambda: print("Saving Image...")),
@@ -776,12 +794,21 @@ class MainWindow(QMainWindow):
         self.val_hrv.setFont(QFont(FONT_MONO, 24, QFont.Weight.Bold))
         self.val_hrv.setStyleSheet(f"color: {COLOR_TEXT}")
         v_hrv.addWidget(self.val_hrv)
+
+        #Time Column
+        v_time = QVBoxLayout()
+        v_time.addWidget(QLabel("Time:"))
+        self.val_time = QLabel("--:--")
+        self.val_time.setFont(QFont(FONT_MONO, 24, QFont.Weight.Bold))
+        self.val_time.setStyleSheet(f"color: {COLOR_TEXT}")
+        v_time.addWidget(self.val_time)
         
         hl.addLayout(v_eda)
         hl.addLayout(v_hr)
         hl.addLayout(v_hrv)
+        hl.addLayout(v_time)
         grp_met.setLayout(hl)
-        layout.addWidget(grp_met)
+        layout.addWidget(grp_met)        
         
         # Flag Management
         grp_flag = QGroupBox("Flag Management")
@@ -803,6 +830,13 @@ class MainWindow(QMainWindow):
         layout.addWidget(grp_flag)
         
         layout.addStretch()
+
+    def update_elapsed_time(self):
+        if not self.session_start_time:
+            return
+        elapsed = datetime.datetime.now() - self.session_start_time
+        minutes, seconds = divmod(int(elapsed.total_seconds()), 60)
+        self.val_time.setText(f"{minutes:02d}:{seconds:02d}")
 
     # --- LOGIC ---
     def on_connect_request(self):
@@ -909,6 +943,31 @@ class MainWindow(QMainWindow):
         if "rmssd" in data:
             self.val_hrv.setText(f"{data['rmssd']:.1f} ms")
 
+    def _hrv_check_data_ready(self):
+        if len(self.hrv_processor._rri_ms) < 2:
+            QMessageBox.warning(self, "Insufficient Data", "Not enough RR intervals to plot.")
+            return False
+        return True
+    
+    def _hrv_run_rmssd(self):
+        if len(self.hrv_processor._rri_ms) < 2:
+            QMessageBox.warning(self, "Insufficient Data", "Not enough RR intervals to plot.")
+            return
+        self.hrv_processor.compute_hrv()
+        self.statusBar().showMessage("HRV (RMSSD) Computed.", 3000)
+
+    def _hrv_open_rri(self):
+        if self._hrv_check_data_ready():
+            self._hrv_windows.append(self.hrv_processor.open_rri_window())
+
+    def _hrv_open_poincare(self):
+        if self._hrv_check_data_ready():
+            self._hrv_windows.append(self.hrv_processor.open_poincare_window())
+    
+    def _hrv_open_psd(self):
+        if self._hrv_check_data_ready():
+            self._hrv_windows.append(self.hrv_processor.open_psd_window())
+
     def on_connection_timeout(self):
         if "CONNECTING" in self.lbl_conn.text():
             self.on_hardware_error("Connection timed out: No data received within 5 seconds.")
@@ -941,6 +1000,10 @@ class MainWindow(QMainWindow):
         # Reset Graphs
         self.graph_main.reset_data()
         self.graph_sub.reset_data()
+
+        # Start timer
+        self.session_start_time = datetime.datetime.now()
+        self.timer_elapsed.start(1000)
         
         self.statusBar().showMessage("Session Ready. Press Start to begin data stream.")
 
@@ -1084,6 +1147,9 @@ class MainWindow(QMainWindow):
             # Stop Timers
             if self.conn_timer.isActive():
                 self.conn_timer.stop()
+
+            if self.timer_elapsed.isActive():
+                self.timer_elapsed.stop()
             
             # Stop Thread
             if self.ingestion_thread:
