@@ -62,7 +62,7 @@ class HardwareIngestionThread(QThread):
     # Emits error messages for the UI status bar
     error_occurred = Signal(str)
 
-    def __init__(self, port: str = "COM3", baudrate: int = 115200, parent=None):
+    def __init__(self, port: str = "COM4", baudrate: int = 115200, parent=None):
         super().__init__(parent)
         self.port = port
         self.baudrate = baudrate
@@ -111,42 +111,63 @@ class HardwareIngestionThread(QThread):
 
     def _parse_telemetry(self, line: str) -> Optional[SensorPacket]:
         """
-        Expects a unified string format: 
-        "EDA:4095,3000.5|IMU:1.0,0.5,0.1,2.0,2.1,2.2,45.0,30.0,10.0|HR:80000,72.5,45.2"
+        Parses the ESP32 hardware output format:
+        "GSR raw=2668 smooth=2669.74 | IR=0 | ACC=0.07,-0.01,1.02 | GYRO=-0.06,-0.06,0.00 | ANG=-0.50,-4.32,94.11"
+
+        BPM and HRV are computed by the GUI's PPGProcessor/HRVProcessor, not the device.
         """
         try:
             packet = SensorPacket(timestamp=time.time())
-            sections = line.split('|')
+            sections = [s.strip() for s in line.split('|')]
+            imu_parts = {}
 
             for section in sections:
-                if section.startswith("EDA:"):
-                    vals = section.replace("EDA:", "").split(',')
-                    if len(vals) == 2:
-                        packet.eda = EDAData(raw=float(vals[0]), smooth=float(vals[1]))
-                
-                elif section.startswith("IMU:"):
-                    vals = section.replace("IMU:", "").split(',')
-                    if len(vals) == 9:
-                        packet.imu = IMUData(
-                            ax=float(vals[0]), ay=float(vals[1]), az=float(vals[2]),
-                            gx=float(vals[3]), gy=float(vals[4]), gz=float(vals[5]),
-                            roll=float(vals[6]), pitch=float(vals[7]), yaw=float(vals[8])
-                        )
-                
-                elif section.startswith("HR:"):
-                    vals = section.replace("HR:", "").split(',')
+                if section.startswith("GSR"):
+                    # "GSR raw=2668 smooth=2669.74"
+                    raw_val = smooth_val = None
+                    for part in section.split():
+                        if part.startswith("raw="):
+                            raw_val = float(part.split('=')[1])
+                        elif part.startswith("smooth="):
+                            smooth_val = float(part.split('=')[1])
+                    if raw_val is not None and smooth_val is not None:
+                        packet.eda = EDAData(raw=raw_val, smooth=smooth_val)
+
+                elif section.startswith("IR="):
+                    packet.cardiac = CardiacData(
+                        ir_value=int(section.split('=')[1]),
+                        bpm=0.0,
+                        hrv=0.0
+                    )
+
+                elif section.startswith("ACC="):
+                    vals = section[4:].split(',')
                     if len(vals) == 3:
-                        packet.cardiac = CardiacData(
-                            ir_value=int(vals[0]), bpm=float(vals[1]), hrv=float(vals[2])
-                        )
-            
-            # Ensure we actually parsed something before returning
+                        imu_parts['acc'] = (float(vals[0]), float(vals[1]), float(vals[2]))
+
+                elif section.startswith("GYRO="):
+                    vals = section[5:].split(',')
+                    if len(vals) == 3:
+                        imu_parts['gyro'] = (float(vals[0]), float(vals[1]), float(vals[2]))
+
+                elif section.startswith("ANG="):
+                    vals = section[4:].split(',')
+                    if len(vals) == 3:
+                        imu_parts['ang'] = (float(vals[0]), float(vals[1]), float(vals[2]))
+
+            if len(imu_parts) == 3:
+                acc, gyro, ang = imu_parts['acc'], imu_parts['gyro'], imu_parts['ang']
+                packet.imu = IMUData(
+                    ax=acc[0], ay=acc[1], az=acc[2],
+                    gx=gyro[0], gy=gyro[1], gz=gyro[2],
+                    roll=ang[0], pitch=ang[1], yaw=ang[2]
+                )
+
             if packet.eda or packet.imu or packet.cardiac:
                 return packet
             return None
 
-        except (ValueError, IndexError) as e:
-            # Fail silently on corrupted serial lines (common in live hardware streams)
+        except (ValueError, IndexError):
             return None
 
     def stop(self):
@@ -158,7 +179,7 @@ if __name__ == "__main__":
     app = QApplication(sys.argv)
 
     # Note: Change "COM3" to your actual ESP32 port (e.g., "/dev/ttyUSB0" on Linux)
-    ingestion_node = HardwareIngestionThread(port="COM3", baudrate=115200)
+    ingestion_node = HardwareIngestionThread(port="COM4", baudrate=115200)
 
     packet_count = [0]
     print(f"Using Standalone Testing Mode")
@@ -169,7 +190,10 @@ if __name__ == "__main__":
         if packet.eda:
             print(f"  -> EDA: Raw={packet.eda.raw}, Smooth={packet.eda.smooth}")
         if packet.cardiac:
-            print(f"  -> Cardiac: BPM={packet.cardiac.bpm}, HRV={packet.cardiac.hrv}")
+            print(f"  -> Cardiac: IR={packet.cardiac.ir_value}")
+        if packet.imu:
+            print(f"  -> IMU: ACC=({packet.imu.ax:.2f},{packet.imu.ay:.2f},{packet.imu.az:.2f}) "
+                  f"ANG=({packet.imu.roll:.2f},{packet.imu.pitch:.2f},{packet.imu.yaw:.2f})")
 
     def on_error(msg: str):
         print(f"SYSTEM ERROR: {msg}")

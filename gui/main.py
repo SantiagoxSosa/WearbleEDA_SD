@@ -4,9 +4,12 @@ from activity import ActivityProfileDialog
 from colorConstraints import *
 from rawdata import HardwareIngestionThread, SensorPacket, get_available_ports
 from simdata import SimulationIngestionThread
+from wesad import WesadIngestionThread
 from eda_process import EDAProcessor
 from ppg import PPGProcessor
 from hrv import HRVProcessor
+from export import ExportDialog
+from saveToImage import ImageExportDialog
 
 import sys
 import datetime
@@ -35,19 +38,66 @@ class StyledDialog(QDialog):
 class ConnectDialog(StyledDialog):
     def __init__(self, parent=None):
         super().__init__("Device Connection", parent)
-        self.setFixedSize(450, 400)
+        self.setFixedSize(450, 450)
         
-        header = QLabel("Available Serial Ports")
+        header = QLabel("Data Source")
         header.setObjectName("h1")
         self.layout_main.addWidget(header)
         
-        self.list_widget = QListWidget()
-        self.layout_main.addWidget(self.list_widget)
+        self.combo_mode = QComboBox()
+        self.combo_mode.addItems(["None (Live Hardware)", "NeuroKit2 (Simulation)", "WESAD Dataset"])
+        self.combo_mode.currentIndexChanged.connect(self.on_mode_changed)
+        self.layout_main.addWidget(self.combo_mode)
         
-        self.chk_debug = QCheckBox("Debug Mode (Simulation)")
-        self.chk_debug.setStyleSheet(f"color: {COLOR_TEXT}; font-weight: bold; margin: 10px 0;")
-        self.chk_debug.toggled.connect(self.on_debug_toggled)
-        self.layout_main.addWidget(self.chk_debug)
+        self.stack = QStackedWidget()
+        
+        # Page 0: Hardware List
+        self.page_hw = QWidget()
+        hw_layout = QVBoxLayout(self.page_hw)
+        hw_layout.setContentsMargins(0, 0, 0, 0)
+        hw_layout.addWidget(QLabel("Available Serial Ports:"))
+        self.list_widget = QListWidget()
+        hw_layout.addWidget(self.list_widget)
+        
+        # Page 1: NK2 Sim
+        self.page_nk2 = QWidget()
+        nk_layout = QVBoxLayout(self.page_nk2)
+        nk_layout.setContentsMargins(0, 0, 0, 0)
+        lbl_nk2 = QLabel("NeuroKit2 will generate synthetic physiological streams.")
+        lbl_nk2.setWordWrap(True)
+        nk_layout.addWidget(lbl_nk2)
+        nk_layout.addStretch()
+        
+        # Page 2: WESAD
+        self.page_wesad = QWidget()
+        w_layout = QFormLayout(self.page_wesad)
+        w_layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.txt_eda = QLineEdit()
+        btn_eda = QPushButton("...")
+        btn_eda.setFixedWidth(30)
+        btn_eda.clicked.connect(lambda: self.select_file(self.txt_eda))
+        h_eda = QHBoxLayout()
+        h_eda.setContentsMargins(0, 0, 0, 0)
+        h_eda.addWidget(self.txt_eda)
+        h_eda.addWidget(btn_eda)
+        
+        self.txt_ppg = QLineEdit()
+        btn_ppg = QPushButton("...")
+        btn_ppg.setFixedWidth(30)
+        btn_ppg.clicked.connect(lambda: self.select_file(self.txt_ppg))
+        h_ppg = QHBoxLayout()
+        h_ppg.setContentsMargins(0, 0, 0, 0)
+        h_ppg.addWidget(self.txt_ppg)
+        h_ppg.addWidget(btn_ppg)
+        
+        w_layout.addRow("EDA CSV:", h_eda)
+        w_layout.addRow("BVP/PPG CSV:", h_ppg)
+        
+        self.stack.addWidget(self.page_hw)
+        self.stack.addWidget(self.page_nk2)
+        self.stack.addWidget(self.page_wesad)
+        self.layout_main.addWidget(self.stack)
         
         btn_box = QHBoxLayout()
         self.btn_connect = QPushButton("Connect")
@@ -63,13 +113,20 @@ class ConnectDialog(StyledDialog):
         self.layout_main.addLayout(btn_box)
         
         self.selected_port = None
-        self.debug_mode = False
+        self.selected_mode = "None (Live Hardware)"
+        self.wesad_eda_path = ""
+        self.wesad_ppg_path = ""
         self.populate_ports()
 
-    def on_debug_toggled(self, checked):
-        self.debug_mode = checked
-        self.list_widget.setEnabled(not checked)
-        if checked:
+    def select_file(self, line_edit):
+        path, _ = QFileDialog.getOpenFileName(self, "Select CSV Data", "", "CSV Files (*.csv)")
+        if path:
+            line_edit.setText(path)
+
+    def on_mode_changed(self, index):
+        self.stack.setCurrentIndex(index)
+        self.selected_mode = self.combo_mode.currentText()
+        if index > 0:
             self.btn_connect.setEnabled(True)
         else:
             self.populate_ports()
@@ -86,8 +143,16 @@ class ConnectDialog(StyledDialog):
             self.btn_connect.setEnabled(False)
 
     def accept(self):
-        if self.debug_mode:
+        if self.selected_mode == "NeuroKit2 (Simulation)":
             self.selected_port = "Simulation"
+            super().accept()
+        elif self.selected_mode == "WESAD Dataset":
+            self.selected_port = "WESAD"
+            self.wesad_eda_path = self.txt_eda.text()
+            self.wesad_ppg_path = self.txt_ppg.text()
+            if not self.wesad_eda_path or not self.wesad_ppg_path:
+                QMessageBox.warning(self, "Missing Files", "Please select both EDA and BVP/PPG CSV files.")
+                return
             super().accept()
         elif self.list_widget.currentItem() and self.list_widget.currentItem().text() != "No ports found":
             self.selected_port = self.list_widget.currentItem().text()
@@ -256,6 +321,7 @@ class BioSignalPlot(QWidget):
         # Data Containers (Strip Chart Logic)
         self.buffer_size = 300
         self.fs = 20.0 # Hz
+        self.view_duration = 30.0 # Seconds of data to display in the scrolling window
         # X-Data will hold actual timestamps (simulated)
         self.x_data = np.array([])
         
@@ -356,14 +422,13 @@ class BioSignalPlot(QWidget):
         self.data1 = np.append(self.data1, val1)
         self.data2 = np.append(self.data2, val2)
         
-        if len(self.x_data) > self.buffer_size:
-            self.x_data = self.x_data[-self.buffer_size:]
-            self.data1 = self.data1[-self.buffer_size:]
-            self.data2 = self.data2[-self.buffer_size:]
-        
         # Update Curves
         self.curve1.setData(self.x_data, self.data1)
         self.curve2.setData(self.x_data, self.data2)
+        
+        # Auto-scroll X axis to follow the newest data
+        if new_time > self.view_duration:
+            self.plot_widget.setXRange(new_time - self.view_duration, new_time, padding=0)
 
     def push_data_batch(self, val1_list, val2_list):
         """Updates the plot with a batch of new data points"""
@@ -386,15 +451,15 @@ class BioSignalPlot(QWidget):
         self.data1 = np.concatenate([self.data1, val1_list])
         self.data2 = np.concatenate([self.data2, val2_list])
         
-        # Slice if needed
-        if len(self.x_data) > self.buffer_size:
-            self.x_data = self.x_data[-self.buffer_size:]
-            self.data1 = self.data1[-self.buffer_size:]
-            self.data2 = self.data2[-self.buffer_size:]
-        
         # Update Curves
         self.curve1.setData(self.x_data, self.data1)
         self.curve2.setData(self.x_data, self.data2)
+        
+        # Auto-scroll X axis to follow the newest data
+        if len(self.x_data) > 0:
+            latest_time = self.x_data[-1]
+            if latest_time > self.view_duration:
+                self.plot_widget.setXRange(latest_time - self.view_duration, latest_time, padding=0)
 
 # --- MAIN WINDOW ---
 class MainWindow(QMainWindow):
@@ -411,13 +476,13 @@ class MainWindow(QMainWindow):
         self.is_paused = True
         self.active_flags = [] # Stores dicts of {timestamp, line_obj, list_item}
         self.sampling_rate = 20 # Default
+        self.raw_eda_buffer = np.array([])
         
         # --- DATA PROCESSORS ---
         self.eda_processor = EDAProcessor(self, sampling_rate=self.sampling_rate)
         self.ppg_processor = PPGProcessor(self, sampling_rate=self.sampling_rate)
         self.hrv_processor = HRVProcessor(sampling_rate=self.sampling_rate, window_second=30, parent=self)
         self.hrv_processor.hrv_computed.connect(self.on_hrv_update)
-        self._hrv_windows = []
         
         # Data Buffer for UI Throttling
         self.packet_buffer = []
@@ -429,12 +494,6 @@ class MainWindow(QMainWindow):
         self.conn_timer = QTimer(self)
         self.conn_timer.setSingleShot(True)
         self.conn_timer.timeout.connect(self.on_connection_timeout)
-
-        # Time elapsed Timer
-        self.session_start_time = None
-        self.timer_elapsed = QTimer(self)
-        self.timer_elapsed.timeout.connect(self.update_elapsed_time)
-
 
         QApplication.instance().setStyleSheet(ResearchStyleSheet.get_stylesheet())
         self.setup_ui()
@@ -517,7 +576,6 @@ class MainWindow(QMainWindow):
             ("Activity\nProfile", QStyle.SP_MediaSeekForward, self.open_activity_profile) # Motion-ish
         ])
         self.ribbon_tabs.addTab(acq_page, "Recording")
-
         
         # GROUP 3: ANALYSIS
         ana_page = create_page([
@@ -527,21 +585,11 @@ class MainWindow(QMainWindow):
             ("NK2\nVerify", QStyle.SP_ComputerIcon, lambda: self.eda_processor.create_debug_plot())
         ])
         self.ribbon_tabs.addTab(ana_page, "Analysis")
-
-        # GROUP 4: HRV
-        # Clicking on the buttons opens a separate window with an interactive graph
-        hrv_page = create_page([
-            #("Run\nRMSSD", QStyle.SP_FileDialogDetailedView, self._hrv_run_rmssd),
-            ("Display\nR-R intervals", QStyle.SP_FileDialogDetailedView, self._hrv_open_rri),
-            ("Display\nPoincare Plot", QStyle.SP_FileDialogDetailedView,  self._hrv_open_poincare),
-            ("Display\nPSD", QStyle.SP_FileDialogDetailedView, self._hrv_open_psd),
-        ])
-        self.ribbon_tabs.addTab(hrv_page, "HRV") 
         
-        # GROUP 5: EXPORT
+        # GROUP 4: EXPORT
         exp_page = create_page([
-            ("Export\nCSV", QStyle.SP_FileIcon, lambda: print("Exporting CSV...")),
-            ("Save Graph\nImage", QStyle.SP_DialogSaveButton, lambda: print("Saving Image...")),
+            ("Export\nCSV", QStyle.SP_FileIcon, self.open_export_dialog),
+            ("Save Graph\nImage", QStyle.SP_DialogSaveButton, self.open_image_export_dialog),
             ("Generate\nLab Report", QStyle.SP_MessageBoxInformation, lambda: print("Generating Report..."))
         ])
         self.ribbon_tabs.addTab(exp_page, "Export")
@@ -616,72 +664,101 @@ class MainWindow(QMainWindow):
         layout.addWidget(grp_dev)
         
         # Recording Button
-        grp_rec = QGroupBox("Recording Control")
+        grp_rec = QGroupBox("Session Control")
         rl = QVBoxLayout()
-        self.btn_rec = QPushButton("REC")
-        self.btn_rec.setCheckable(True)
-        self.btn_rec.setFixedSize(100, 100)
-        self.btn_rec.setEnabled(False)
-        self.btn_rec.setStyleSheet(f"""
-            QPushButton {{ 
-                background-color: #F0F0F0; 
-                border-radius: 50px; 
-                border: 4px solid #CCC; 
-                color: #AAA; 
-                font-size: 18pt; 
-                font-weight: 900; 
-            }}
-            QPushButton:checked {{ 
-                background-color: {COLOR_RECORD}; 
-                border-color: {COLOR_PRIMARY}; 
-                color: white; 
-                border: 4px solid {COLOR_PRIMARY};
-            }}
-        """)
-        self.btn_rec.toggled.connect(self.on_record_toggled)
         
-        h = QHBoxLayout()
-        h.addStretch(); h.addWidget(self.btn_rec); h.addStretch()
-        rl.addLayout(h)
-        
-        self.lbl_rec_hint = QLabel("Ready")
-        self.lbl_rec_hint.setAlignment(Qt.AlignCenter)
-        rl.addWidget(self.lbl_rec_hint)
+        # self.btn_rec = QPushButton("REC")
+        # self.btn_rec.setCheckable(True)
+        # self.btn_rec.setFixedSize(100, 100)
+        # self.btn_rec.setEnabled(False)
+        # self.btn_rec.setStyleSheet(f"""
+        #     QPushButton {{ 
+        #         background-color: #F0F0F0; 
+        #         border-radius: 50px; 
+        #         border: 4px solid #CCC; 
+        #         color: #AAA; 
+        #         font-size: 18pt; 
+        #         font-weight: 900; 
+        #     }}
+        #     QPushButton:checked {{ 
+        #         background-color: {COLOR_RECORD}; 
+        #         border-color: {COLOR_PRIMARY}; 
+        #         color: white; 
+        #         border: 4px solid {COLOR_PRIMARY};
+        #     }}
+        # """)
+        # self.btn_rec.toggled.connect(self.on_record_toggled)
+        # 
+        # h = QHBoxLayout()
+        # h.addStretch(); h.addWidget(self.btn_rec); h.addStretch()
+        # rl.addLayout(h)
+        # 
+        # self.lbl_rec_hint = QLabel("Ready")
+        # self.lbl_rec_hint.setAlignment(Qt.AlignCenter)
+        # rl.addWidget(self.lbl_rec_hint)
         
         # --- Playback Controls ---
         playback_layout = QHBoxLayout()
-        playback_layout.setSpacing(5)
+        playback_layout.setSpacing(10)
+        playback_layout.setContentsMargins(5, 15, 5, 15)
         
         self.btn_sim_start = QPushButton("Start")
         self.btn_sim_start.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
         self.btn_sim_start.clicked.connect(self.on_start_sim)
         self.btn_sim_start.setEnabled(False)
+        self.btn_sim_start.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.btn_sim_start.setMinimumHeight(45)
+        self.btn_sim_start.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLOR_PRIMARY};
+                color: white;
+                border-radius: 8px;
+                font-weight: bold;
+                font-size: 11pt;
+            }}
+            QPushButton:hover {{ background-color: #0A3D70; }}
+            QPushButton:disabled {{ background-color: #CCCCCC; color: #888888; }}
+        """)
         
         self.btn_sim_pause = QPushButton("Pause")
         self.btn_sim_pause.setIcon(self.style().standardIcon(QStyle.SP_MediaPause))
         self.btn_sim_pause.clicked.connect(self.on_pause_sim)
         self.btn_sim_pause.setEnabled(False)
+        self.btn_sim_pause.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.btn_sim_pause.setMinimumHeight(45)
+        self.btn_sim_pause.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLOR_ACCENT};
+                color: {COLOR_PRIMARY};
+                border-radius: 8px;
+                font-weight: bold;
+                font-size: 11pt;
+            }}
+            QPushButton:hover {{ background-color: #E5B000; }}
+            QPushButton:disabled {{ background-color: #CCCCCC; color: #888888; }}
+        """)
         
         self.btn_sim_stop = QPushButton("Stop")
         self.btn_sim_stop.setIcon(self.style().standardIcon(QStyle.SP_MediaStop))
         self.btn_sim_stop.clicked.connect(self.on_stop_sim)
         self.btn_sim_stop.setEnabled(False)
+        self.btn_sim_stop.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.btn_sim_stop.setMinimumHeight(45)
+        self.btn_sim_stop.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLOR_RECORD};
+                color: white;
+                border-radius: 8px;
+                font-weight: bold;
+                font-size: 11pt;
+            }}
+            QPushButton:hover {{ background-color: #C9302C; }}
+            QPushButton:disabled {{ background-color: #CCCCCC; color: #888888; }}
+        """)
         
-        for btn in [self.btn_sim_start, self.btn_sim_pause, self.btn_sim_stop]:
-            btn.setStyleSheet(f"""
-                QPushButton {{
-                    background-color: {COLOR_BG_WHITE};
-                    color: {COLOR_PRIMARY};
-                    border: 1px solid {COLOR_PRIMARY};
-                    border-radius: 8px;
-                    padding: 6px;
-                    font-weight: bold;
-                }}
-                QPushButton:hover {{
-                    background-color: #E0E0E0;
-                }}
-            """)
-            playback_layout.addWidget(btn)
+        playback_layout.addWidget(self.btn_sim_start)
+        playback_layout.addWidget(self.btn_sim_pause)
+        playback_layout.addWidget(self.btn_sim_stop)
             
         rl.addLayout(playback_layout)
         
@@ -794,21 +871,12 @@ class MainWindow(QMainWindow):
         self.val_hrv.setFont(QFont(FONT_MONO, 24, QFont.Weight.Bold))
         self.val_hrv.setStyleSheet(f"color: {COLOR_TEXT}")
         v_hrv.addWidget(self.val_hrv)
-
-        #Time Column
-        v_time = QVBoxLayout()
-        v_time.addWidget(QLabel("Time:"))
-        self.val_time = QLabel("--:--")
-        self.val_time.setFont(QFont(FONT_MONO, 24, QFont.Weight.Bold))
-        self.val_time.setStyleSheet(f"color: {COLOR_TEXT}")
-        v_time.addWidget(self.val_time)
         
         hl.addLayout(v_eda)
         hl.addLayout(v_hr)
         hl.addLayout(v_hrv)
-        hl.addLayout(v_time)
         grp_met.setLayout(hl)
-        layout.addWidget(grp_met)        
+        layout.addWidget(grp_met)
         
         # Flag Management
         grp_flag = QGroupBox("Flag Management")
@@ -831,13 +899,6 @@ class MainWindow(QMainWindow):
         
         layout.addStretch()
 
-    def update_elapsed_time(self):
-        if not self.session_start_time:
-            return
-        elapsed = datetime.datetime.now() - self.session_start_time
-        minutes, seconds = divmod(int(elapsed.total_seconds()), 60)
-        self.val_time.setText(f"{minutes:02d}:{seconds:02d}")
-
     # --- LOGIC ---
     def on_connect_request(self):
         dlg = ConnectDialog(self)
@@ -851,15 +912,27 @@ class MainWindow(QMainWindow):
             self.is_paused = True
             
             try:
-                if dlg.debug_mode:
+                if dlg.selected_mode == "NeuroKit2 (Simulation)":
                     self.ingestion_thread = SimulationIngestionThread(sampling_rate=self.sampling_rate)
                     # Immediate UI update for simulation
-                    self.lbl_conn.setText("CONNECTED (SIM)")
+                    self.lbl_conn.setText("CONNECTED (NK2 SIM)")
                     self.lbl_conn.setStyleSheet("color: green; border: 2px solid green; font-weight: bold; border-radius: 8px; background: #E8F5E9;")
                     self.btn_start.setEnabled(True)
                     self.btn_start.setText("Start Live Session")
                     self.btn_disconnect.setEnabled(True)
-                    self.statusBar().showMessage("Simulation Stream Active.")
+                    self.statusBar().showMessage("NeuroKit2 Simulation Stream Active.")
+                elif dlg.selected_mode == "WESAD Dataset":
+                    self.ingestion_thread = WesadIngestionThread(
+                        eda_csv_path=dlg.wesad_eda_path,
+                        ppg_csv_path=dlg.wesad_ppg_path,
+                        sampling_rate=self.sampling_rate
+                    )
+                    self.lbl_conn.setText("CONNECTED (WESAD)")
+                    self.lbl_conn.setStyleSheet("color: green; border: 2px solid green; font-weight: bold; border-radius: 8px; background: #E8F5E9;")
+                    self.btn_start.setEnabled(True)
+                    self.btn_start.setText("Start Live Session")
+                    self.btn_disconnect.setEnabled(True)
+                    self.statusBar().showMessage("WESAD Stream Active.")
                 else:
                     self.ingestion_thread = HardwareIngestionThread(port=dlg.selected_port)
                     self.lbl_conn.setText("CONNECTING...")
@@ -890,9 +963,9 @@ class MainWindow(QMainWindow):
         self.btn_disconnect.setEnabled(False)
         
         # Disable Recording Controls
-        if self.btn_rec.isChecked():
-            self.btn_rec.setChecked(False)
-        self.btn_rec.setEnabled(False)
+        # if self.btn_rec.isChecked():
+        #     self.btn_rec.setChecked(False)
+        # self.btn_rec.setEnabled(False)
         self.btn_sim_start.setEnabled(False)
         self.btn_sim_pause.setEnabled(False)
         self.btn_sim_stop.setEnabled(False)
@@ -919,6 +992,10 @@ class MainWindow(QMainWindow):
             
         packets = self.packet_buffer
         self.packet_buffer = []
+        
+        # Store true raw EDA data for export
+        raw_eda = [float(p.eda.raw) if p.eda else 0.0 for p in packets]
+        self.raw_eda_buffer = np.concatenate([self.raw_eda_buffer, raw_eda])
 
         # 1. Pass data to processors
         # EDA & Decomposition
@@ -943,31 +1020,6 @@ class MainWindow(QMainWindow):
         if "rmssd" in data:
             self.val_hrv.setText(f"{data['rmssd']:.1f} ms")
 
-    def _hrv_check_data_ready(self):
-        if len(self.hrv_processor._rri_ms) < 2:
-            QMessageBox.warning(self, "Insufficient Data", "Not enough RR intervals to plot.")
-            return False
-        return True
-    
-    def _hrv_run_rmssd(self):
-        if len(self.hrv_processor._rri_ms) < 2:
-            QMessageBox.warning(self, "Insufficient Data", "Not enough RR intervals to plot.")
-            return
-        self.hrv_processor.compute_hrv()
-        self.statusBar().showMessage("HRV (RMSSD) Computed.", 3000)
-
-    def _hrv_open_rri(self):
-        if self._hrv_check_data_ready():
-            self._hrv_windows.append(self.hrv_processor.open_rri_window())
-
-    def _hrv_open_poincare(self):
-        if self._hrv_check_data_ready():
-            self._hrv_windows.append(self.hrv_processor.open_poincare_window())
-    
-    def _hrv_open_psd(self):
-        if self._hrv_check_data_ready():
-            self._hrv_windows.append(self.hrv_processor.open_psd_window())
-
     def on_connection_timeout(self):
         if "CONNECTING" in self.lbl_conn.text():
             self.on_hardware_error("Connection timed out: No data received within 5 seconds.")
@@ -986,7 +1038,7 @@ class MainWindow(QMainWindow):
         if not self.device_connected: return
         
         # Enable Recording Controls
-        self.btn_rec.setEnabled(True)
+        # self.btn_rec.setEnabled(True)
         
         # Start in PAUSED state so user must click Start
         self.is_paused = True
@@ -1000,26 +1052,23 @@ class MainWindow(QMainWindow):
         # Reset Graphs
         self.graph_main.reset_data()
         self.graph_sub.reset_data()
-
-        # Start timer
-        self.session_start_time = datetime.datetime.now()
-        self.timer_elapsed.start(1000)
+        self.raw_eda_buffer = np.array([])
         
         self.statusBar().showMessage("Session Ready. Press Start to begin data stream.")
 
     def on_load_clicked(self):
         QFileDialog.getOpenFileName(self, "Load Data", "", "CSV Files (*.csv)")
 
-    def on_record_toggled(self, checked):
-        self.is_recording = checked
-        if checked:
-            self.lbl_rec_hint.setText("RECORDING")
-            self.lbl_rec_hint.setStyleSheet(f"color: {COLOR_RECORD}; font-weight: bold;")
-        else:
-            self.lbl_rec_hint.setText("Ready")
-            self.lbl_rec_hint.setStyleSheet("color: black;")
-        
-        print("Recording State Toggled")
+    # def on_record_toggled(self, checked):
+    #     self.is_recording = checked
+    #     if checked:
+    #         self.lbl_rec_hint.setText("RECORDING")
+    #         self.lbl_rec_hint.setStyleSheet(f"color: {COLOR_RECORD}; font-weight: bold;")
+    #     else:
+    #         self.lbl_rec_hint.setText("Ready")
+    #         self.lbl_rec_hint.setStyleSheet("color: black;")
+    #     
+    #     print("Recording State Toggled")
 
     def on_insert_event(self, label=None):
         if label is None:
@@ -1147,9 +1196,6 @@ class MainWindow(QMainWindow):
             # Stop Timers
             if self.conn_timer.isActive():
                 self.conn_timer.stop()
-
-            if self.timer_elapsed.isActive():
-                self.timer_elapsed.stop()
             
             # Stop Thread
             if self.ingestion_thread:
@@ -1225,6 +1271,79 @@ class MainWindow(QMainWindow):
             self.hrv_processor.set_window_seconds(new_hrv)
             
             self.statusBar().showMessage(f"Acquisition settings updated: {new_rate}Hz")
+            
+    def open_export_dialog(self):
+        # Construct EVENTS array mapping 1 to timestamps where events occurred, 0 otherwise
+        time_data = self.graph_main.x_data
+        events_array = np.zeros(len(time_data), dtype=int)
+        
+        if len(time_data) > 0:
+            for flag in self.active_flags:
+                # Retrieve the exact timestamp (X value) of the event marker
+                ts = flag['line_main'].value()
+                # Find the closest time index in the current data buffer
+                idx = (np.abs(time_data - ts)).argmin()
+                events_array[idx] = 1
+
+        # Gather aligned data from current session plots
+        data = {
+            "Time": self.graph_main.x_data,
+            "EDA_Raw": self.raw_eda_buffer,
+            "EDA_Smooth": self.graph_main.data1,
+            "EDA_Phasic": self.graph_sub.data1,
+            "EDA_Tonic": self.graph_sub.data2,
+            "Heart_Rate": self.graph_main.data2,
+            "EVENTS": events_array
+        }
+        
+        # Construct default filename based on patient info and date
+        date_str = datetime.datetime.now().strftime("%Y%m%d")
+        sub_name = self.txt_sub_name.text().strip()
+        sub_id = self.txt_sub_id.text().strip()
+        session = self.txt_session.text().strip()
+
+        name_parts = []
+        if sub_name:
+            name_parts.append(sub_name.replace(" ", "_"))
+        if sub_id:
+            name_parts.append(f"ID{sub_id}")
+        if session:
+            name_parts.append(f"Sess{session}")
+        
+        default_filename = f"{'_'.join(name_parts)}_{date_str}.csv" if name_parts else f"Export_{date_str}.csv"
+
+        dlg = ExportDialog(data=data, default_filename=default_filename, parent=self)
+        dlg.exec()
+
+    def open_image_export_dialog(self):
+        # Gather aligned data from current session plots
+        data = {
+            "Time": self.graph_main.x_data,
+            "EDA_Raw": self.raw_eda_buffer,
+            "EDA_Smooth": self.graph_main.data1,
+            "EDA_Phasic": self.graph_sub.data1,
+            "EDA_Tonic": self.graph_sub.data2,
+            "Heart_Rate": self.graph_main.data2
+        }
+        
+        # Construct default filename based on patient info and datetime
+        date_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        sub_name = self.txt_sub_name.text().strip()
+        sub_id = self.txt_sub_id.text().strip()
+        session = self.txt_session.text().strip()
+
+        name_parts = []
+        if sub_name:
+            name_parts.append(sub_name.replace(" ", "_"))
+        if sub_id:
+            name_parts.append(f"ID{sub_id}")
+        if session:
+            name_parts.append(f"Sess{session}")
+        
+        default_filename = f"{'_'.join(name_parts)}_{date_str}.png" if name_parts else f"Export_{date_str}.png"
+
+        dlg = ImageExportDialog(data=data, default_filename=default_filename, parent=self)
+        dlg.exec()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
