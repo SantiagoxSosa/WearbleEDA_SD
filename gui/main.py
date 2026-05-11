@@ -318,17 +318,16 @@ class BioSignalPlot(QWidget):
         
         self.main_layout.addWidget(self.plot_widget)
         
-        # Data Containers (Strip Chart Logic)
-        self.buffer_size = 300
-        self.fs = 20.0 # Hz
-        self.view_duration = 30.0 # Seconds of data to display in the scrolling window
-        # X-Data will hold actual timestamps (simulated)
-        self.x_data = np.array([])
-        
+        # Data Containers — Python lists for O(1) amortized append (avoids O(n) np.concatenate each frame)
+        self.fs = 20.0
+        self.view_duration = 30.0
+        self.x_data = []
+        self.data1  = []
+        self.data2  = []
+
         self.dual_axis = right_label is not None
-        
+
         # --- LEFT AXIS (Primary) ---
-        # Determining Colors based on label for strict requirement matching
         if "EDA" in left_label:
             c1 = COLOR_EDA
             name1 = left_label
@@ -339,12 +338,15 @@ class BioSignalPlot(QWidget):
             c1 = COLOR_PRIMARY
             name1 = left_label
 
-        self.data1 = np.array([])
-        self.curve1 = self.plot_widget.plot(self.x_data, self.data1, pen=pg.mkPen(c1, width=2), name=name1)
+        # clipToView=True  → PyQtGraph skips all points outside the 30-second viewport (biggest render win)
+        # autoDownsample=True → reduces drawn points to screen-pixel resolution when zoomed far out
+        self.curve1 = self.plot_widget.plot(
+            [], [], pen=pg.mkPen(c1, width=2), name=name1,
+            clipToView=True, autoDownsample=True, downsampleMethod='peak'
+        )
 
         # --- RIGHT AXIS (Secondary) or SAME AXIS ---
         if self.dual_axis:
-            # Setup ViewBox for Right Axis
             self.plot_item = self.plot_widget.plotItem
             self.vb2 = pg.ViewBox()
             self.vb2.setMouseEnabled(x=True, y=False)
@@ -353,24 +355,23 @@ class BioSignalPlot(QWidget):
             self.plot_item.getAxis('right').linkToView(self.vb2)
             self.vb2.setXLink(self.plot_item)
             self.plot_item.getAxis('right').setLabel(right_label, units=right_unit)
-            
-            self.data2 = np.array([])
-            # HR is Red
+
             c2 = COLOR_HR if "Heart" in right_label else COLOR_RECORD
-            
-            self.curve2 = pg.PlotCurveItem(self.x_data, self.data2, pen=pg.mkPen(c2, width=2, style=Qt.DashLine), name=right_label)
+
+            # PlotDataItem (not PlotCurveItem) is required for clipToView support on the secondary axis
+            self.curve2 = pg.PlotDataItem(
+                [], [], pen=pg.mkPen(c2, width=2, style=Qt.DashLine), name=right_label,
+                clipToView=True, autoDownsample=True, downsampleMethod='peak'
+            )
             self.vb2.addItem(self.curve2)
-            
-            # Add to legend manually since it's on a different viewbox
             self.legend.addItem(self.curve2, right_label)
-            
             self.plot_item.vb.sigResized.connect(self.update_views)
         else:
-            # Same axis (Bottom Graph: Phasic vs Tonic)
-            self.data2 = np.array([])
-            # Tonic is Gold
             c2 = COLOR_TONIC
-            self.curve2 = self.plot_widget.plot(self.x_data, self.data2, pen=pg.mkPen(c2, width=2), name="Tonic Level")
+            self.curve2 = self.plot_widget.plot(
+                [], [], pen=pg.mkPen(c2, width=2), name="Tonic Level",
+                clipToView=True, autoDownsample=True, downsampleMethod='peak'
+            )
 
     def update_views(self):
         if self.dual_axis:
@@ -378,12 +379,11 @@ class BioSignalPlot(QWidget):
             self.vb2.linkedViewChanged(self.plot_item.vb, self.vb2.XAxis)
 
     def reset_data(self):
-        self.x_data = np.array([])
-        self.data1 = np.array([])
-        self.data2 = np.array([])
-        self.curve1.setData(self.x_data, self.data1)
-        self.curve2.setData(self.x_data, self.data2)
-        # Clear lines
+        self.x_data = []
+        self.data1  = []
+        self.data2  = []
+        self.curve1.setData([], [])
+        self.curve2.setData([], [])
         for item in self.plot_widget.items():
             if isinstance(item, pg.InfiniteLine):
                 self.plot_widget.removeItem(item)
@@ -410,23 +410,16 @@ class BioSignalPlot(QWidget):
 
     def push_data(self, val1, val2):
         """Updates the plot with new real data points"""
-        # Shift Time Window
         dt = 1.0 / self.fs
-        
-        if len(self.x_data) > 0:
-            new_time = self.x_data[-1] + dt
-        else:
-            new_time = 0.0
-        
-        self.x_data = np.append(self.x_data, new_time)
-        self.data1 = np.append(self.data1, val1)
-        self.data2 = np.append(self.data2, val2)
-        
-        # Update Curves
+        new_time = self.x_data[-1] + dt if self.x_data else 0.0
+
+        self.x_data.append(new_time)
+        self.data1.append(val1)
+        self.data2.append(val2)
+
         self.curve1.setData(self.x_data, self.data1)
         self.curve2.setData(self.x_data, self.data2)
-        
-        # Auto-scroll X axis to follow the newest data
+
         if new_time > self.view_duration:
             self.plot_widget.setXRange(new_time - self.view_duration, new_time, padding=0)
 
@@ -434,57 +427,43 @@ class BioSignalPlot(QWidget):
         """Updates the plot with a batch of new data points"""
         n = len(val1_list)
         if n == 0: return
-        
-        # Shift Time Window
+
         dt = 1.0 / self.fs
-        
-        # Generate new time points extending from the last known time
-        if len(self.x_data) > 0:
-            last_time = self.x_data[-1]
-        else:
-            last_time = -dt # So first point starts at 0
-            
-        new_times = last_time + np.arange(1, n + 1) * dt
-        
-        # Append
-        self.x_data = np.concatenate([self.x_data, new_times])
-        self.data1 = np.concatenate([self.data1, val1_list])
-        self.data2 = np.concatenate([self.data2, val2_list])
-        
-        # Update Curves
+        last_time = self.x_data[-1] if self.x_data else -dt
+
+        # Generate timestamps with numpy (fast), then extend lists (O(k), not O(n))
+        new_times = (last_time + np.arange(1, n + 1) * dt).tolist()
+
+        self.x_data.extend(new_times)
+        self.data1.extend(val1_list)
+        self.data2.extend(val2_list)
+
         self.curve1.setData(self.x_data, self.data1)
         self.curve2.setData(self.x_data, self.data2)
-        
-        # Auto-scroll X axis to follow the newest data
-        if len(self.x_data) > 0:
-            latest_time = self.x_data[-1]
-            if latest_time > self.view_duration:
-                self.plot_widget.setXRange(latest_time - self.view_duration, latest_time, padding=0)
+
+        latest_time = self.x_data[-1]
+        if latest_time > self.view_duration:
+            self.plot_widget.setXRange(latest_time - self.view_duration, latest_time, padding=0)
 
     def overwrite_data(self, val1_list, val2_list, latest_time):
-        """Completely replaces the underlying data arrays for the window, 
+        """Completely replaces the underlying data for the window,
            reconstructing the X-axis from the latest_time backwards."""
         n = len(val1_list)
         if n == 0: return
-        
+
         dt = 1.0 / self.fs
-        
-        # Generate new time points ending at latest_time
-        new_times = latest_time - np.arange(n - 1, -1, -1) * dt
-        
+        new_times = (latest_time - np.arange(n - 1, -1, -1) * dt).tolist()
+
         self.x_data = new_times
-        self.data1 = np.array(val1_list)
-        self.data2 = np.array(val2_list)
-        
-        # Update Curves
+        self.data1  = list(val1_list)
+        self.data2  = list(val2_list)
+
         self.curve1.setData(self.x_data, self.data1)
         self.curve2.setData(self.x_data, self.data2)
-        
-        # Auto-scroll X axis to follow the newest data
-        if len(self.x_data) > 0:
-            curr_latest = self.x_data[-1]
-            if curr_latest > self.view_duration:
-                self.plot_widget.setXRange(curr_latest - self.view_duration, curr_latest, padding=0)
+
+        curr_latest = self.x_data[-1]
+        if curr_latest > self.view_duration:
+            self.plot_widget.setXRange(curr_latest - self.view_duration, curr_latest, padding=0)
 
 # --- MAIN WINDOW ---
 class MainWindow(QMainWindow):
@@ -501,7 +480,7 @@ class MainWindow(QMainWindow):
         self.is_paused = True
         self.active_flags = [] # Stores dicts of {timestamp, line_obj, list_item}
         self.sampling_rate = 20 # Default
-        self.raw_eda_buffer = np.array([])
+        self.raw_eda_buffer = []
         
         # --- DATA PROCESSORS ---
         self.eda_processor = EDAProcessor(self, sampling_rate=self.sampling_rate)
@@ -1029,7 +1008,7 @@ class MainWindow(QMainWindow):
         
         # Store true raw EDA data for export
         raw_eda = [float(p.eda.raw) if p.eda else 0.0 for p in packets]
-        self.raw_eda_buffer = np.concatenate([self.raw_eda_buffer, raw_eda])
+        self.raw_eda_buffer.extend(raw_eda)
 
         # 1. Pass data to processors
         # EDA & Decomposition
@@ -1106,7 +1085,7 @@ class MainWindow(QMainWindow):
         # Reset Graphs
         self.graph_main.reset_data()
         self.graph_sub.reset_data()
-        self.raw_eda_buffer = np.array([])
+        self.raw_eda_buffer = []
         
         self.statusBar().showMessage("Session Ready. Press Start to begin data stream.")
 
