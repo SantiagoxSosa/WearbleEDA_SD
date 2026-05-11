@@ -158,42 +158,42 @@ class ConnectDialog(StyledDialog):
             self.selected_port = self.list_widget.currentItem().text()
             super().accept()
 
-class ExitDialog(StyledDialog):
-    def __init__(self, parent=None, title="Save Session?", header="End Session", text="Do you want to save the session before exiting?"):
-        super().__init__(title, parent)
-        self.setFixedSize(400, 180)
-        
-        lbl_header = QLabel(header)
-        lbl_header.setObjectName("h1")
-        self.layout_main.addWidget(lbl_header)
-        
-        self.layout_main.addWidget(QLabel(text))
-        
-        btn_box = QHBoxLayout()
-        self.btn_save = QPushButton("Save")
-        self.btn_discard = QPushButton("Don't Save")
-        self.btn_discard.setObjectName("secondary")
-        self.btn_cancel = QPushButton("Cancel")
-        self.btn_cancel.setObjectName("secondary")
-        
-        self.btn_save.clicked.connect(self.on_save)
-        self.btn_discard.clicked.connect(self.on_discard)
-        self.btn_cancel.clicked.connect(self.reject)
-        
-        btn_box.addWidget(self.btn_save)
-        btn_box.addWidget(self.btn_discard)
-        btn_box.addWidget(self.btn_cancel)
-        self.layout_main.addLayout(btn_box)
-        
-        self.action = None 
-
-    def on_save(self):
-        self.action = 'save'
-        self.accept()
-
-    def on_discard(self):
-        self.action = 'discard'
-        self.accept()
+# class ExitDialog(StyledDialog):
+#     def __init__(self, parent=None, title="Save Session?", header="End Session", text="Do you want to save the session before exiting?"):
+#         super().__init__(title, parent)
+#         self.setFixedSize(400, 180)
+#         
+#         lbl_header = QLabel(header)
+#         lbl_header.setObjectName("h1")
+#         self.layout_main.addWidget(lbl_header)
+#         
+#         self.layout_main.addWidget(QLabel(text))
+#         
+#         btn_box = QHBoxLayout()
+#         self.btn_save = QPushButton("Save")
+#         self.btn_discard = QPushButton("Don't Save")
+#         self.btn_discard.setObjectName("secondary")
+#         self.btn_cancel = QPushButton("Cancel")
+#         self.btn_cancel.setObjectName("secondary")
+#         
+#         self.btn_save.clicked.connect(self.on_save)
+#         self.btn_discard.clicked.connect(self.on_discard)
+#         self.btn_cancel.clicked.connect(self.reject)
+#         
+#         btn_box.addWidget(self.btn_save)
+#         btn_box.addWidget(self.btn_discard)
+#         btn_box.addWidget(self.btn_cancel)
+#         self.layout_main.addLayout(btn_box)
+#         
+#         self.action = None 
+# 
+#     def on_save(self):
+#         self.action = 'save'
+#         self.accept()
+# 
+#     def on_discard(self):
+#         self.action = 'discard'
+#         self.accept()
 
 class HardwareConfigDialog(StyledDialog):
     def __init__(self, current_rate, eda_win, ppg_win, hrv_win, parent=None):
@@ -461,6 +461,31 @@ class BioSignalPlot(QWidget):
             if latest_time > self.view_duration:
                 self.plot_widget.setXRange(latest_time - self.view_duration, latest_time, padding=0)
 
+    def overwrite_data(self, val1_list, val2_list, latest_time):
+        """Completely replaces the underlying data arrays for the window, 
+           reconstructing the X-axis from the latest_time backwards."""
+        n = len(val1_list)
+        if n == 0: return
+        
+        dt = 1.0 / self.fs
+        
+        # Generate new time points ending at latest_time
+        new_times = latest_time - np.arange(n - 1, -1, -1) * dt
+        
+        self.x_data = new_times
+        self.data1 = np.array(val1_list)
+        self.data2 = np.array(val2_list)
+        
+        # Update Curves
+        self.curve1.setData(self.x_data, self.data1)
+        self.curve2.setData(self.x_data, self.data2)
+        
+        # Auto-scroll X axis to follow the newest data
+        if len(self.x_data) > 0:
+            curr_latest = self.x_data[-1]
+            if curr_latest > self.view_duration:
+                self.plot_widget.setXRange(curr_latest - self.view_duration, curr_latest, padding=0)
+
 # --- MAIN WINDOW ---
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -483,6 +508,7 @@ class MainWindow(QMainWindow):
         self.ppg_processor = PPGProcessor(self, sampling_rate=self.sampling_rate)
         self.hrv_processor = HRVProcessor(sampling_rate=self.sampling_rate, window_second=30, parent=self)
         self.hrv_processor.hrv_computed.connect(self.on_hrv_update)
+        self._hrv_windows = []
         
         # Data Buffer for UI Throttling
         self.packet_buffer = []
@@ -534,7 +560,7 @@ class MainWindow(QMainWindow):
         
         file_menu = menubar.addMenu("File")
         file_menu.addAction("New Session", lambda: self.on_start_session() if self.device_connected else None)
-        file_menu.addAction("Open Session...", self.on_load_clicked)
+        # file_menu.addAction("Open Session...", self.on_load_clicked)
         file_menu.addAction("Import Subject Data...", self.on_import_subject)
         file_menu.addSeparator()
         file_menu.addAction("Exit", self.close)
@@ -585,8 +611,16 @@ class MainWindow(QMainWindow):
             ("NK2\nVerify", QStyle.SP_ComputerIcon, lambda: self.eda_processor.create_debug_plot())
         ])
         self.ribbon_tabs.addTab(ana_page, "Analysis")
-        
-        # GROUP 4: EXPORT
+
+        # GROUP 4: HRV Analysis
+        hrv_page = create_page([
+        ("Display\nR-R intervals", QStyle.SP_FileDialogDetailedView, self._hrv_open_rri),
+        ("Display\nPoincare Plot", QStyle.SP_FileDialogDetailedView, self._hrv_open_poincare),
+        ("Display\nPSD", QStyle.SP_FileDialogDetailedView, self._hrv_open_psd),
+        ])
+        self.ribbon_tabs.addTab(hrv_page, "HRV")
+            
+        # GROUP 5: EXPORT
         exp_page = create_page([
             ("Export\nCSV", QStyle.SP_FileIcon, self.open_export_dialog),
             ("Save Graph\nImage", QStyle.SP_DialogSaveButton, self.open_image_export_dialog),
@@ -788,16 +822,16 @@ class MainWindow(QMainWindow):
         """)
         self.btn_start.clicked.connect(self.on_start_session)
         
-        btn_load = QPushButton("Load Previous Data")
-        btn_load.setObjectName("secondary")
-        btn_load.setFixedSize(300, 70)
-        btn_load.clicked.connect(self.on_load_clicked)
+        # btn_load = QPushButton("Load Previous Data")
+        # btn_load.setObjectName("secondary")
+        # btn_load.setFixedSize(300, 70)
+        # btn_load.clicked.connect(self.on_load_clicked)
         
         l_dash.addWidget(title)
         l_dash.addSpacing(50)
         l_dash.addWidget(self.btn_start)
-        l_dash.addSpacing(20)
-        l_dash.addWidget(btn_load)
+        # l_dash.addSpacing(20)
+        # l_dash.addWidget(btn_load)
         
         self.center_stack.addWidget(p_dash)
         
@@ -1014,11 +1048,31 @@ class MainWindow(QMainWindow):
         
         # Update Graphs
         self.graph_main.push_data_batch(eda_batch, hr_batch)
-        self.graph_sub.push_data_batch(phasic_batch, tonic_batch)
+        
+        latest_time = self.graph_main.x_data[-1] if len(self.graph_main.x_data) > 0 else 0.0
+        self.graph_sub.overwrite_data(phasic_batch, tonic_batch, latest_time)
 
     def on_hrv_update(self, data):
         if "rmssd" in data:
             self.val_hrv.setText(f"{data['rmssd']:.1f} ms")
+
+    def _hrv_check_data_ready(self):
+        if len(self.hrv_processor._rri_ms) < 2:
+            QMessageBox.warning(self, "Insufficient Data", "Not enough RR intervals to plot.")
+            return False
+        return True
+
+    def _hrv_open_rri(self):
+        if self._hrv_check_data_ready():
+            self._hrv_windows.append(self.hrv_processor.open_rri_window())
+
+    def _hrv_open_poincare(self):
+        if self._hrv_check_data_ready():
+            self._hrv_windows.append(self.hrv_processor.open_poincare_window())
+
+    def _hrv_open_psd(self):
+        if self._hrv_check_data_ready():
+            self._hrv_windows.append(self.hrv_processor.open_psd_window())
 
     def on_connection_timeout(self):
         if "CONNECTING" in self.lbl_conn.text():
@@ -1056,8 +1110,8 @@ class MainWindow(QMainWindow):
         
         self.statusBar().showMessage("Session Ready. Press Start to begin data stream.")
 
-    def on_load_clicked(self):
-        QFileDialog.getOpenFileName(self, "Load Data", "", "CSV Files (*.csv)")
+    # def on_load_clicked(self):
+    #     QFileDialog.getOpenFileName(self, "Load Data", "", "CSV Files (*.csv)")
 
     # def on_record_toggled(self, checked):
     #     self.is_recording = checked
@@ -1178,32 +1232,48 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Data Stream Paused.")
 
     def on_stop_sim(self):
-        dlg = ExitDialog(self, "End Session?", "End Session", "Do you want to save the session data?")
-        if dlg.exec() == QDialog.Accepted:
-            if dlg.action == 'save':
-                print("Saving Session Data...") # Placeholder
-            self.on_disconnect()
-            self.center_stack.setCurrentIndex(0) # Return to dashboard
+        # dlg = ExitDialog(self, "End Session?", "End Session", "Do you want to save the session data?")
+        # if dlg.exec() == QDialog.Accepted:
+        #     if dlg.action == 'save':
+        #         print("Saving Session Data...") # Placeholder
+        self.on_disconnect()
+        self.center_stack.setCurrentIndex(0) # Return to dashboard
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Space:
+            # Avoid consuming space if a text input has focus
+            focus_widget = QApplication.focusWidget()
+            if isinstance(focus_widget, (QLineEdit, QTextEdit)):
+                super().keyPressEvent(event)
+                return
+                
+            if self.center_stack.currentIndex() == 1 and self.device_connected:
+                if self.is_paused and self.btn_sim_start.isEnabled():
+                    self.on_start_sim()
+                elif not self.is_paused and self.btn_sim_pause.isEnabled():
+                    self.on_pause_sim()
+        else:
+            super().keyPressEvent(event)
 
     def closeEvent(self, event):
-        dlg = ExitDialog(self)
-        if dlg.exec() == QDialog.Accepted:
-            if dlg.action == 'save':
-                print("Saving...")
-            elif dlg.action == 'discard':
-                print("Discarding...")
+        # dlg = ExitDialog(self)
+        # if dlg.exec() == QDialog.Accepted:
+        #     if dlg.action == 'save':
+        #         print("Saving...")
+        #     elif dlg.action == 'discard':
+        #         print("Discarding...")
             
-            # Stop Timers
-            if self.conn_timer.isActive():
-                self.conn_timer.stop()
+        # Stop Timers
+        if self.conn_timer.isActive():
+            self.conn_timer.stop()
             
-            # Stop Thread
-            if self.ingestion_thread:
-                # stop() handles the wait() call internally
-                self.ingestion_thread.stop()
-            event.accept()
-        else:
-            event.ignore()
+        # Stop Thread
+        if self.ingestion_thread:
+            # stop() handles the wait() call internally
+            self.ingestion_thread.stop()
+        event.accept()
+        # else:
+        #     event.ignore()
     def open_subject_data_dialog(self):
         dialog = SubjectDataDialog(self)
         if dialog.exec():

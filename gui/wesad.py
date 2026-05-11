@@ -32,15 +32,18 @@ class WesadIngestionThread(QThread):
         Row 2: Sampling Rate (Hz)
         Row 3+: Signal Data
         """
-        df = pd.read_csv(filepath, header=None)
+        # Read just the first two rows to check for Empatica E4 metadata
+        meta_df = pd.read_csv(filepath, header=None, nrows=2)
         
         # Check if the format matches Empatica E4 (first row is a timestamp > 1e9, second is a small float/int)
-        if df.iloc[0, 0] > 1e8 and df.iloc[1, 0] < 1000:
-            start_time = df.iloc[0, 0]
-            fs = df.iloc[1, 0]
-            signal = df.iloc[2:, 0].values
+        if meta_df.iloc[0, 0] > 1e8 and meta_df.iloc[1, 0] < 1000:
+            start_time = meta_df.iloc[0, 0]
+            fs = meta_df.iloc[1, 0]
+            signal_df = pd.read_csv(filepath, header=None, skiprows=2)
+            signal = signal_df.iloc[:, 0].values
         else:
             # Fallback for standard single-column CSV
+            df = pd.read_csv(filepath, header=None)
             start_time = time.time()
             fs = self.sampling_rate # assume same as target if not provided
             signal = df.iloc[:, 0].values
@@ -66,32 +69,6 @@ class WesadIngestionThread(QThread):
         self.ppg_resampled = nk.signal_resample(ppg_raw, desired_length=num_samples, 
                                                 sampling_rate=ppg_fs, desired_sampling_rate=self.sampling_rate)
 
-        # Pre-process EDA
-        try:
-            eda_signals, _ = nk.eda_process(self.eda_resampled, sampling_rate=self.sampling_rate)
-            self.eda_smooth = eda_signals["EDA_Clean"].values
-        except Exception as e:
-            print(f"NeuroKit2 EDA processing error, using raw: {e}")
-            self.eda_smooth = self.eda_resampled
-
-        # Pre-process PPG (Cardiac)
-        try:
-            ppg_signals, ppg_info = nk.ppg_process(self.ppg_resampled, sampling_rate=self.sampling_rate)
-            self.bpm = ppg_signals["PPG_Rate"].values
-            
-            # Create a smooth HRV signal
-            peaks = ppg_info["PPG_Peaks"]
-            if len(peaks) > 3:
-                hrv_raw = nk.hrv_time(peaks, sampling_rate=self.sampling_rate, show=False)["HRV_RMSSD"].values
-                hrv_indices = np.linspace(0, num_samples, len(hrv_raw))
-                self.hrv = np.interp(np.arange(num_samples), hrv_indices, hrv_raw)
-            else:
-                self.hrv = np.zeros(num_samples)
-        except Exception as e:
-            print(f"NeuroKit2 PPG processing error, generating mock BPM/HRV: {e}")
-            self.bpm = np.full(num_samples, 75.0)
-            self.hrv = np.full(num_samples, 40.0)
-
         self.total_samples = num_samples
 
     def run(self):
@@ -114,13 +91,13 @@ class WesadIngestionThread(QThread):
                 
                 cardiac = CardiacData(
                     ir_value=ir_val,
-                    bpm=self.bpm[index],
-                    hrv=self.hrv[index]
+                    bpm=0.0,
+                    hrv=0.0
                 )
 
                 eda = EDAData(
                     raw=self.eda_resampled[index],
-                    smooth=self.eda_smooth[index]
+                    smooth=self.eda_resampled[index]
                 )
 
                 # Mock IMU Data

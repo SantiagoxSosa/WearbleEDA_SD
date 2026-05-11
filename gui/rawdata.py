@@ -69,6 +69,22 @@ class HardwareIngestionThread(QThread):
         self._running = True
         self.serial_conn = None
 
+    def adc_to_microsiemens(self, adc_val: float, v_ref: float = 3.3, adc_res: int = 4095, r_series: float = 10000.0) -> float:
+        """
+        Converts raw ADC values to Conductance in microSiemens (µS).
+        Assumes a voltage divider circuit where V_out is measured across R_series.
+        """
+        if adc_val <= 0 or adc_val >= adc_res:
+            return 0.0
+            
+        v_out = (adc_val / adc_res) * v_ref
+        try:
+            r_skin = r_series * ((v_ref / v_out) - 1.0)
+            conductance_us = 1_000_000.0 / r_skin
+            return conductance_us
+        except ZeroDivisionError:
+            return 0.0
+
     def run(self):
         
         try:
@@ -127,9 +143,11 @@ class HardwareIngestionThread(QThread):
                     raw_val = smooth_val = None
                     for part in section.split():
                         if part.startswith("raw="):
-                            raw_val = float(part.split('=')[1])
+                            raw_adc = float(part.split('=')[1])
+                            raw_val = self.adc_to_microsiemens(raw_adc)
                         elif part.startswith("smooth="):
-                            smooth_val = float(part.split('=')[1])
+                            smooth_adc = float(part.split('=')[1])
+                            smooth_val = self.adc_to_microsiemens(smooth_adc)
                     if raw_val is not None and smooth_val is not None:
                         packet.eda = EDAData(raw=raw_val, smooth=smooth_val)
 

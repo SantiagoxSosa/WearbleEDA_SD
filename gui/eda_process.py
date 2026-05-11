@@ -33,6 +33,7 @@ class EDAProcessor(QObject):
         for p in packets:
             val = 0.0
             if p.eda:
+                # Data is now expected to be in microSiemens before arriving here
                 val = float(p.eda.raw)
             new_raw.append(val)
         
@@ -58,24 +59,25 @@ class EDAProcessor(QObject):
                 self.last_signals = signals
                 self.last_info = _
                 
-                # 4. Extract 'EDA_Clean', 'EDA_Phasic', 'EDA_Tonic'
-                # We only need the values corresponding to the new packets we just added
+                # 4. Extract components using the Delay Extraction Method
                 n_new = len(new_raw)
                 
-                # signals is a DataFrame. We take the last n_new rows.
+                # Clean EDA is kept live (no delay)
                 eda_clean = signals["EDA_Clean"].iloc[-n_new:].to_list()
-                phasic = signals["EDA_Phasic"].iloc[-n_new:].to_list()
-                tonic = signals["EDA_Tonic"].iloc[-n_new:].to_list()
                 
-                return eda_clean, phasic, tonic
+                # Return the full arrays for overwrite architecture
+                phasic_full = signals["EDA_Phasic"].to_list()
+                tonic_full = signals["EDA_Tonic"].to_list()
+                
+                return eda_clean, phasic_full, tonic_full
                 
             except Exception as e:
                 print(f"EDA Processing Error: {e}")
                 # Fallback on error
-                return new_raw, [0.0]*len(new_raw), new_raw
+                return new_raw, [0.0]*len(self.buffer), self.buffer.copy()
         else:
-            # Not enough data yet, return raw as smooth, 0 for components
-            return new_raw, [0.0]*len(new_raw), new_raw
+            # Not enough data yet
+            return new_raw, [0.0]*len(self.buffer), self.buffer.copy()
 
     def create_debug_plot(self):
         """
@@ -85,6 +87,7 @@ class EDAProcessor(QObject):
         if hasattr(self, 'last_signals') and hasattr(self, 'last_info'):
             # Create the plot using NeuroKit2's native function
             nk.eda_plot(self.last_signals, self.last_info)
+            # Also plot the tonic component since eda_plot omits it
             plt.show()
 
     def set_sampling_rate(self, rate):
